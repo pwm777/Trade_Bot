@@ -309,6 +309,7 @@ class MarketDataUtils:
                 "required_warmup_5m": 96,  # из-за rolling VWAP(96)
                 "cusum_1m": {
                     "min_warmup": 120,
+                    "min_warmup_gap": 60,
                     "period": 14,
                     "normalize_window": 50,
                     "z_to_conf": 1.0,
@@ -1481,19 +1482,31 @@ class MarketDataUtils:
             self.logger.error(f"Failed to upsert candles_1m for {symbol}: {e}", exc_info=True)
             return 0
 
-    async def warmup_1m_indicators_and_cusum(self, symbol: str, bars_1m: List[dict]) -> dict:
+    async def warmup_1m_indicators_and_cusum(self,symbol: str,
+            bars_1m: List[dict],is_gap_warmup: bool = False ) -> dict:
         """
         Инкрементальный разогрев 1m индикаторов (идентично онлайн-режиму)
         Избегает look-ahead bias - использует только прошлые данные
-
-        ✅ ИСПРАВЛЕНИЯ:
-        1. Лучше логирование
-        2. Проверка готовности перед возвратом
-        3. Валидация final_state
+        1. Проверка ОБЩЕГО количества данных в БД (не только новых свечей)
+        2. Лучше логирование
+        3. Валидация final_state на основе РЕАЛЬНЫХ данных в БД
         """
         if not bars_1m:
             return {"ok": False, "state": 0, "z": 0.0, "conf": 0.0, "reason": "no_data"}
 
+        # ✅ Выбираем правильный порог
+        if is_gap_warmup:
+            min_warm = int(self.cfg["features"]["cusum_1m"].get("min_warmup_gap", 60))
+            warmup_type = "gap"
+        else:
+            min_warm = int(self.cfg["features"]["cusum_1m"]["min_warmup"])
+            warmup_type = "standard"
+
+        self.logger.info(
+            f"🔥 Starting 1m warmup for {symbol}: "
+            f"{len(bars_1m)} candles, "
+            f"min_warmup={min_warm} ({warmup_type})"
+        )
         min_warm = int(self.cfg["features"]["cusum_1m"]["min_warmup"])
         saved_count = 0
         error_count = 0
@@ -1532,6 +1545,14 @@ class MarketDataUtils:
                 # Сохраняем сырую свечу как fallback
                 await self.upsert_candles_1m(symbol, [current_bar])
 
+        # ✅ НОВАЯ ЛОГИКА: Проверяем РЕАЛЬНОЕ количество данных в БД
+        try:
+            all_candles_in_db = await self.read_candles_1m(symbol, last_n=min_warm + 10)
+            total_available = len(all_candles_in_db)
+        except Exception as e:
+            self.logger.error(f"Failed to read candles from DB: {e}")
+            total_available = len(bars_1m)
+
         # ✅ ФИНАЛЬНОЕ СОСТОЯНИЕ (берем из последней рассчитанной свечи)
         final_state = {"ok": False, "state": 0, "z": 0.0, "conf": 0.0, "reason": "no_data"}
 
@@ -1554,20 +1575,24 @@ class MarketDataUtils:
                     z_val = 0.0
                     conf_val = 0.0
 
+                # ✅ КЛЮЧЕВОЕ ИЗМЕНЕНИЕ: Проверяем ОБЩЕЕ количество данных в БД
+                is_ready = total_available >= min_warm
+
                 final_state = {
-                    "ok": len(bars_1m) >= min_warm,
+                    "ok": is_ready,
                     "state": state_val,
                     "z": z_val,
                     "conf": conf_val,
-                    "reason": "warmup_completed"
+                    "reason": "warmup_completed" if is_ready else f"insufficient_total_{total_available}/{min_warm}"
                 }
 
         self.logger.info(
             f"✅ 1m warmup completed:\n"
             f"  Symbol: {symbol}\n"
-            f"  Total: {len(bars_1m)} candles\n"
-            f"  Processed: {saved_count} with indicators\n"
+            f"  Processed new: {saved_count}/{len(bars_1m)} candles\n"
             f"  Errors: {error_count}\n"
+            f"  Total in DB: {total_available} candles\n"
+            f"  Required: {min_warm}\n"
             f"  Ready: {final_state['ok']}\n"
             f"  Final state: {final_state['state']}, z={final_state['z']:.3f}, conf={final_state['conf']:.3f}"
         )

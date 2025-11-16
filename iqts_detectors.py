@@ -290,13 +290,14 @@ class RoleBasedOnlineTrendDetector(Detector):
         Анализирует готовые CUSUM данные из БД и формирует сигнал.
         CUSUM уже рассчитан при агрегации свечей.
 
-        ✅ ИСПРАВЛЕНИЯ:
+        ✅ ИСПРАВЛЕНИЯ v3:
         1. Инициализация всех переменных в начале
         2. Валидация cusum_state как INTEGER перед использованием
         3. Проверка NaN ПЕРЕД преобразованием типов
         4. Единая точка нормализации confidence
         5. Устранены дубликаты кода
         6. Улучшено логирование ошибок
+        7. ✅ НОВОЕ: Валидация консистентности ok + reason
         """
         self.logger.debug(f"[{self.role}] Analyzing {self.timeframe}")
 
@@ -332,12 +333,16 @@ class RoleBasedOnlineTrendDetector(Detector):
                 "metadata": {"required": self.required_warmup, "actual": len(df)}
             })
 
-        # ═══════════════════════════════════════════════════════════
-        # 3. ЧТЕНИЕ ГОТОВЫХ CUSUM ДАННЫХ ИЗ БД
-        # ═══════════════════════════════════════════════════════════
+        # ═════════════════════════════════════════════════════════════
+        # 2. ИНИЦИАЛИЗАЦИЯ ПЕРЕМЕННЫХ (для избежания UnboundLocalError)
+        # ═══════════════════════════════════════════════════════════════
         cusum_state_raw = None
         cusum_conf_raw = None
         cusum_zscore_raw = None
+
+        # ═══════════════════════════════════════════════════════════
+        # 3. ЧТЕНИЕ ГОТОВЫХ CUSUM ДАННЫХ ИЗ БД
+        # ═══════════════════════════════════════════════════════════
         try:
             # Проверка наличия необходимых колонок
             required_cols = ['cusum_state', 'cusum_conf', 'cusum_reason',
@@ -359,7 +364,6 @@ class RoleBasedOnlineTrendDetector(Detector):
 
             # ✅ БЕЗОПАСНОЕ извлечение скалярных значений
             try:
-                cusum_state_raw = 0
                 # ✅ ШАГ 1: Извлекаем raw значения
                 cusum_state_raw = df['cusum_state'].iloc[-1]
                 cusum_conf_raw = df['cusum_conf'].iloc[-1]
@@ -529,7 +533,109 @@ class RoleBasedOnlineTrendDetector(Detector):
             f"ok={ok}, reason={reason}"
         )
 
-        return normalize_signal(signal)
+        # ═══════════════════════════════════════════════════════════
+        # 7. ✅ ВАЛИДАЦИЯ КОНСИСТЕНТНОСТИ ok + reason
+        # ═══════════════════════════════════════════════════════════
+
+        # Нормализуем сигнал ПЕРЕД валидацией
+        result = normalize_signal(signal)
+
+        # Множество причин, которые НЕ должны сопровождать ok=True
+        INVALID_REASONS_FOR_OK_TRUE = {
+            "invalid_data",
+            "insufficient_data",
+            "insufficient_warmup",
+            "detector_error",
+            "invalid_price",
+            "outside_trading_hours",
+            "daily_limit_reached"
+        }
+
+        # Множество причин, которые ДОЛЖНЫ сопровождать ok=True
+        VALID_REASONS_FOR_OK_TRUE = {
+            "trend_confirmed",
+            "entry_confirmed",
+            "hierarchical_confirmed",
+            "three_level_confirmed"
+        }
+
+        # ✅ ПРОВЕРКА 1: ok=True но reason указывает на проблему
+        if result["ok"] and result["reason"] in INVALID_REASONS_FOR_OK_TRUE:
+            self.logger.error(
+                f"⚠️ [{self.role}] INCONSISTENT SIGNAL: ok=True but reason='{result['reason']}'\n"
+                f"  Direction: {result['direction']}\n"
+                f"  Confidence: {result['confidence']:.3f}\n"
+                f"  ➡️  Forcing ok=False to maintain consistency"
+            )
+
+            # ✅ Сохраняем оригинальную причину в metadata ПЕРЕД изменением
+            original_reason = result["reason"]
+
+            # Исправляем противоречие - создаем новый сигнал
+            result = normalize_signal({
+                "ok": False,
+                "direction": 0,
+                "confidence": 0.0,
+                "reason": original_reason,  # ✅ Используем переменную, не result["reason"]
+                "metadata": {
+                    **result.get("metadata", {}),
+                    "fixed_inconsistency": True,
+                    "original_ok": True,
+                    "original_direction": result["direction"],
+                    "original_confidence": result["confidence"]
+                }
+            })
+
+        # ✅ ПРОВЕРКА 2: ok=False но reason НЕ в списке error-причин
+        elif not result["ok"]:
+            current_reason = result["reason"]
+
+            # Проверяем что reason указывает на успешный сигнал
+            is_success_reason = (
+                    current_reason in VALID_REASONS_FOR_OK_TRUE or
+                    (isinstance(current_reason, str) and current_reason.startswith("z="))
+            )
+
+            # Также проверяем что это НЕ явная ошибка
+            is_not_error = current_reason not in INVALID_REASONS_FOR_OK_TRUE
+
+            if is_success_reason and is_not_error:
+                self.logger.warning(
+                    f"⚠️ [{self.role}] REVERSE INCONSISTENCY: ok=False but reason='{current_reason}'\n"
+                    f"  Direction: {result['direction']}\n"
+                    f"  Confidence: {result['confidence']:.3f}\n"
+                    f"  ➡️  Correcting reason based on actual state"
+                )
+
+                # ✅ Определяем правильную типизированную причину
+                if result["direction"] == 0:
+                    corrected_reason = "no_trend_signal"
+                elif result["confidence"] < self.min_confidence:
+                    corrected_reason = "weak_trend_signal"
+                else:
+                    corrected_reason = "detector_error"
+
+                # ✅ Создаем НОВЫЙ сигнал с исправленной причиной
+                result = normalize_signal({
+                    "ok": False,
+                    "direction": result["direction"],
+                    "confidence": result["confidence"],
+                    "reason": corrected_reason,  # ✅ Типизированное значение
+                    "metadata": {
+                        **result.get("metadata", {}),
+                        "original_reason": current_reason,  # ✅ Сохраняем в metadata
+                        "reason_corrected": True
+                    }
+                })
+
+        # ✅ ФИНАЛЬНОЕ ЛОГИРОВАНИЕ
+        self.logger.debug(
+            f"[{self.role}] ✅ Signal after consistency check: "
+            f"ok={result['ok']}, direction={result['direction']}, "
+            f"conf={result['confidence']:.3f}, reason={result['reason']}"
+        )
+
+        return result
 
     def get_status(self) -> Dict:
         return {

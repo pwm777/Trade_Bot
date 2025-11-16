@@ -4321,3 +4321,199 @@
 2025-11-16 13:36:58,580 - TradingBot - INFO - ✅ Enriched 1m candle loaded for ETHUSDT@1763289360000
 2025-11-16 13:36:58,580 - TradingBot - INFO - 🎯 on_candle_ready received: ETHUSDT @ 1763289360000
 2025-11-16 13:36:58,580 - TradingBot - INFO - 🔥 handle_candle_ready: ETHUSDT ts=1763289360000
+2025-11-16 14:58:02,267 - TradingBot - INFO - Logging to file: data/trading_bot.log
+2025-11-16 14:58:02,307 - TradingBot - INFO - ✅ TradingLogger created successfully with strategy integration
+2025-11-16 14:58:02,316 - TradingBot - INFO - MarketDataUtils v1.0.0 initialized by pwm777 at 2025-11-16 11:58:02 UTC
+2025-11-16 14:58:02,317 - TradingBot - INFO - Current SQLite journal mode: wal
+2025-11-16 14:58:02,317 - TradingBot - INFO - New SQLite journal mode: wal
+2025-11-16 14:58:02,318 - TradingBot - INFO - ✅ WAL mode and optimizations applied successfully
+2025-11-16 14:58:02,320 - TradingBot - INFO - MarketDataUtils created successfully
+2025-11-16 14:58:02,320 - TradingBot - INFO - MarketHistoryManager initialized at 2025-11-16T11:58:02.320680+00:00
+2025-11-16 14:58:02,320 - TradingBot - INFO - MarketHistoryManager created at 2025-11-16T11:58:02.320680+00:00
+2025-11-16 14:58:02,321 - TradingBot - INFO - Creating ImprovedQualityTrendSystem
+2025-11-16 14:58:02,376 - TradingBot - INFO - ✅ Strategy has method: analyze_and_trade
+2025-11-16 14:58:02,376 - TradingBot - INFO - ✅ Strategy has method: generate_signal
+2025-11-16 14:58:02,376 - TradingBot - INFO - ✅ Strategy has method: get_system_status
+2025-11-16 14:58:02,376 - TradingBot - INFO - ✅ Strategy has method: update_performance
+2025-11-16 14:58:02,376 - TradingBot - INFO - ✅ Strategy has method: get_performance_report
+2025-11-16 14:58:02,376 - TradingBot - INFO - ✅ ImprovedQualityTrendSystem created and interface validated
+2025-11-16 14:58:02,376 - TradingBot - INFO - Creating PositionManager
+2025-11-16 14:58:02,493 - TradingBot - INFO - PositionManager created successfully
+2025-11-16 14:58:02,493 - TradingBot - INFO - Creating ExchangeManager
+2025-11-16 14:58:02,517 - TradingBot - WARNING - 🔧 ExchangeManager __init__: execution_mode=DEMO _is_backtest_mode=False _use_sync_stop_check=True
+2025-11-16 14:58:02,517 - TradingBot - INFO - ExchangeManager initialized: demo_mode=True, testnet=False
+2025-11-16 14:58:02,517 - TradingBot - INFO - ExchangeManager created successfully
+2025-11-16 14:58:02,517 - TradingBot - INFO - ✅ execution_engine linked to PositionManager
+2025-11-16 14:58:02,517 - TradingBot - INFO - Creating MarketAggregator for mode: DEMO
+2025-11-16 14:58:02,517 - TradingBot - ERROR - 🔴 DemoMarketAggregatorPhased logger initialized: name=TradingBot, level=20
+2025-11-16 14:58:02,518 - TradingBot - INFO - MarketDataUtils v1.0.0 initialized by pwm777 at 2025-11-16 11:58:02 UTC
+2025-11-16 14:58:02,518 - TradingBot - INFO - Current SQLite journal mode: wal
+2025-11-16 14:58:02,518 - TradingBot - INFO - New SQLite journal mode: wal
+2025-11-16 14:58:02,519 - TradingBot - INFO - ✅ WAL mode and optimizations applied successfully
+2025-11-16 14:58:02,520 - TradingBot - INFO - Created DemoMarketAggregatorPhased (1m+5m with 10s phase shift)
+2025-11-16 14:58:02,520 - TradingBot - INFO - Market aggregator created successfully
+2025-11-16 14:58:02,520 - TradingBot - INFO - Creating AdaptiveExitManager
+2025-11-16 14:58:02,578 - TradingBot - INFO - AdaptiveExitManager created successfully
+2025-11-16 14:58:02,578 - TradingBot - INFO - Creating MainBot with provided trading strategy and PositionManager
+2025-11-16 14:58:02,590 - TradingBot - INFO - ✅ DataProviderFromDB created (DB-only mode, no buffer)
+2025-11-16 14:58:02,590 - TradingBot - INFO - ✅ DataProviderFromDB created
+2025-11-16 14:58:02,591 - TradingBot - INFO - ExecutionEngine created with PositionManager integration
+2025-11-16 14:58:02,591 - TradingBot - INFO - ✅ ExecutionEngine created with PositionManager integration
+2025-11-16 14:58:02,639 - TradingBot - INFO - ✅ EnhancedTradingBot created
+2025-11-16 14:58:02,639 - TradingBot - INFO - ✅ MainBotAdapter created
+2025-11-16 14:58:02,640 - TradingBot - INFO - ✅ COMPONENTS_CREATED - Components: ['trade_log', 'position_manager', 'exchange_manager', 'strategy', 'market_aggregator', 'main_bot', 'exit_manager', 'logger', 'history_manager', 'async_store', 'created_at']
+2025-11-16 14:58:02,640 - TradingBot - INFO - Starting history load for 1 symbols: loading data from 2025-11-15 11:58:02.640000+00:00 to now
+2025-11-16 14:58:02,645 - TradingBot - INFO - Restored indicator state for ETHUSDT 1m from ts=1763289360000
+2025-11-16 14:58:02,678 - TradingBot - INFO - Using existing 1m data for ETHUSDT: 1357 bars from 2025-11-15T11:59:00+00:00 to 2025-11-16T10:36:00+00:00
+2025-11-16 14:58:02,678 - TradingBot - WARNING - Gap detected for ETHUSDT 1m: 82.0 minutes since last candle. Fetching missing data...
+2025-11-16 14:58:03,781 - TradingBot - INFO - Received 82 < 1000 candles for ETHUSDT 1m. End of available data reached.
+2025-11-16 14:58:03,783 - TradingBot - INFO - Completed fetching 82 1m candles for ETHUSDT
+2025-11-16 14:58:03,783 - TradingBot - INFO - Fetched 82 missing 1m candles for ETHUSDT
+2025-11-16 14:58:03,800 - TradingBot - INFO - 🔥 Starting 1m warmup for ETHUSDT: 82 candles, min_warmup=120
+2025-11-16 14:58:05,514 - TradingBot - INFO - ✅ 1m warmup completed:
+  Symbol: ETHUSDT
+  Total: 82 candles
+  Processed: 0 with indicators
+  Errors: 0
+  Ready: False
+  Final state: 0, z=0.000, conf=0.000
+2025-11-16 14:58:05,514 - TradingBot - WARNING - ⚠️ 1m warmup not ready for ETHUSDT: no_data
+2025-11-16 14:58:05,514 - TradingBot - ERROR - Warmup failed for gap candles ETHUSDT 1m
+2025-11-16 14:58:05,514 - TradingBot - INFO - Using existing 1m data for ETHUSDT: 1357 candles
+2025-11-16 14:58:05,515 - TradingBot - INFO - Restored indicator state for ETHUSDT 5m from ts=1763289000000
+2025-11-16 14:58:05,522 - TradingBot - INFO - Using existing 5m data for ETHUSDT: 271 bars from 2025-11-15T12:00:00+00:00 to 2025-11-16T10:30:00+00:00
+2025-11-16 14:58:05,522 - TradingBot - WARNING - Gap detected for ETHUSDT 5m: 88.1 minutes since last candle. Fetching missing data...
+2025-11-16 14:58:06,597 - TradingBot - INFO - Received 17 < 1000 candles for ETHUSDT 5m. End of available data reached.
+2025-11-16 14:58:06,599 - TradingBot - INFO - Completed fetching 17 5m candles for ETHUSDT
+2025-11-16 14:58:06,600 - TradingBot - INFO - Fetched 17 missing 5m candles for ETHUSDT
+2025-11-16 14:58:06,600 - TradingBot - INFO - Warming up 5m with full context: 288 candles
+2025-11-16 14:58:06,600 - TradingBot - INFO - 🚀 START compute_5m_features_bulk for ETHUSDT with 288 candles
+2025-11-16 14:58:06,619 - TradingBot - INFO - 📡 Pre-loaded 288 1m mappings
+2025-11-16 14:58:06,619 - TradingBot - INFO - 🔍 Pre-loading CUSUM windows for each 5m candle...
+2025-11-16 14:58:07,334 - TradingBot - INFO - ✅ Pre-loaded CUSUM windows for 288 candles
+2025-11-16 14:58:12,596 - TradingBot - INFO - Updated ETHUSDT 5m: 271 existing + 17 new = 288 total
+2025-11-16 14:58:12,597 - TradingBot - INFO - History load completed. Results: 1357 1m, 288 5m 
+2025-11-16 14:58:12,598 - TradingBot - INFO - 📊 HISTORY_LOADED - Results: {'ETHUSDT': {'1m': 1357, '5m': 288}}
+2025-11-16 14:58:12,620 - TradingBot - INFO - Starting DemoMarketAggregatorPhased for ['ETHUSDT'] (kline mode)
+2025-11-16 14:58:12,624 - TradingBot - INFO - Last historical 1m for ETHUSDT: 1763294280000 (2025-11-16T11:58:00+00:00)
+2025-11-16 14:58:12,625 - TradingBot - INFO - Last historical 5m for ETHUSDT: 1763294100000 (2025-11-16T11:55:00+00:00)
+2025-11-16 14:58:12,625 - TradingBot - INFO - Connecting WS: wss://fstream.binance.com/stream?streams=ethusdt@kline_1m/ethusdt@kline_5m
+2025-11-16 14:58:13,863 - TradingBot - INFO - Market connection state: connected
+2025-11-16 14:58:13,868 - TradingBot - INFO - ✅ Loaded 1 rows from DB for ETHUSDT 1m (limit requested=1, actual=1)
+2025-11-16 14:58:13,869 - TradingBot - INFO - MainBotAdapter: event-driven mode (no polling loop)
+2025-11-16 14:59:58,472 - TradingBot - INFO - 🔄 Starting 5m indicators calculation for ETHUSDT@1763294100000
+2025-11-16 14:59:58,473 - TradingBot - INFO - 📊 Calling on_candle_ready for ETHUSDT 1m @ 1763294340000
+2025-11-16 14:59:58,474 - TradingBot - INFO - 🔄 Starting 1m CUSUM calculation for ETHUSDT@1763294340000
+2025-11-16 14:59:58,577 - TradingBot - INFO - ✅ 1m CUSUM ready for ETHUSDT@1763294340000: z=-58.00
+2025-11-16 14:59:58,581 - TradingBot - INFO - ✅ Enriched 1m candle loaded for ETHUSDT@1763294340000
+2025-11-16 14:59:58,581 - TradingBot - INFO - 🎯 on_candle_ready received: ETHUSDT @ 1763294340000
+2025-11-16 14:59:58,581 - TradingBot - INFO - 🔥 handle_candle_ready: ETHUSDT ts=1763294340000
+2025-11-16 14:59:58,581 - TradingBot - INFO - 🔍 Rechecking 1m trend for cached 5m signal (age: 47s, global_dir=-1, global_conf=0.81, status=disagreement)
+2025-11-16 14:59:58,623 - TradingBot - INFO - ✅ Loaded 500 rows from DB for ETHUSDT 1m (limit requested=1000, actual=500)
+2025-11-16 14:59:58,623 - TradingBot - INFO - 📊 market_data ready for ETHUSDT 1m: 500 rows
+2025-11-16 14:59:58,625 - TradingBot - INFO - ✅ Enriched 5m candle ready and saved to DB for ETHUSDT@1763294100000 (cmo_14=-16.477194904807888, adx_14=10.03228948476273)
+2025-11-16 14:59:58,625 - TradingBot - INFO - 🎯 Calling on_candle_ready AFTER DB write for ETHUSDT @ 1763294100000
+2025-11-16 14:59:58,625 - TradingBot - INFO - 🎯 on_candle_ready received: ETHUSDT @ 1763294100000
+2025-11-16 14:59:58,626 - TradingBot - INFO - 🔥 handle_candle_ready: ETHUSDT ts=1763294100000
+2025-11-16 14:59:58,626 - TradingBot - INFO - 🔍 Detected 5m candle for ETHUSDT, triggering strategy analysis
+2025-11-16 14:59:58,639 - TradingBot - INFO - ✅ Loaded 200 rows from DB for ETHUSDT 5m (limit requested=1000, actual=200)
+2025-11-16 14:59:58,639 - TradingBot - INFO - 📊 5m DataFrame shape: (200, 46)
+2025-11-16 14:59:58,639 - TradingBot - INFO - 📋 5m columns (46): ['symbol', 'ts', 'ts_close', 'open', 'high', 'low', 'close', 'volume', 'count', 'quote', 'finalized', 'checksum', 'created_ts', 'price_change_5', 'trend_momentum_z', 'cmo_14', 'macd_histogram', 'trend_acceleration_ema7', 'regime_volatility', 'bb_width', 'adx_14', 'plus_di_14', 'minus_di_14', 'atr_14_normalized', 'volume_ratio_ema3', 'candle_relative_body', 'upper_shadow_ratio', 'lower_shadow_ratio', 'price_vs_vwap', 'bb_position', 'cusum_1m_recent', 'cusum_1m_quality_score', 'cusum_1m_trend_aligned', 'cusum_1m_price_move', 'is_trend_pattern_1m', 'body_to_range_ratio_1m', 'close_position_in_range_1m', 'cusum', 'cusum_state', 'cusum_zscore', 'cusum_conf', 'cusum_reason', 'cusum_price_mean', 'cusum_price_std', 'cusum_pos', 'cusum_neg']
+2025-11-16 14:59:58,640 - TradingBot - INFO - 🔍 Last row ts: 1763294100000
+2025-11-16 14:59:58,640 - TradingBot - INFO - 📊 market_data ready for ETHUSDT 5m: 200 rows
+2025-11-16 14:59:58,666 - TradingBot - INFO - ✅ Loaded 500 rows from DB for ETHUSDT 1m (limit requested=1000, actual=500)
+2025-11-16 14:59:58,667 - TradingBot - INFO - 📊 market_data ready for ETHUSDT 1m: 500 rows
+2025-11-16 14:59:58,680 - TradingBot - INFO - ✅ Loaded 200 rows from DB for ETHUSDT 5m (limit requested=1000, actual=200)
+2025-11-16 14:59:58,680 - TradingBot - INFO - 📊 5m DataFrame shape: (200, 46)
+2025-11-16 14:59:58,681 - TradingBot - INFO - 📋 5m columns (46): ['symbol', 'ts', 'ts_close', 'open', 'high', 'low', 'close', 'volume', 'count', 'quote', 'finalized', 'checksum', 'created_ts', 'price_change_5', 'trend_momentum_z', 'cmo_14', 'macd_histogram', 'trend_acceleration_ema7', 'regime_volatility', 'bb_width', 'adx_14', 'plus_di_14', 'minus_di_14', 'atr_14_normalized', 'volume_ratio_ema3', 'candle_relative_body', 'upper_shadow_ratio', 'lower_shadow_ratio', 'price_vs_vwap', 'bb_position', 'cusum_1m_recent', 'cusum_1m_quality_score', 'cusum_1m_trend_aligned', 'cusum_1m_price_move', 'is_trend_pattern_1m', 'body_to_range_ratio_1m', 'close_position_in_range_1m', 'cusum', 'cusum_state', 'cusum_zscore', 'cusum_conf', 'cusum_reason', 'cusum_price_mean', 'cusum_price_std', 'cusum_pos', 'cusum_neg']
+2025-11-16 14:59:58,681 - TradingBot - INFO - 🔍 Last row ts: 1763294100000
+2025-11-16 14:59:58,681 - TradingBot - INFO - 📊 market_data ready for ETHUSDT 5m: 200 rows
+2025-11-16 14:59:58,681 - TradingBot - INFO - 📊 market_data ready for ETHUSDT: {'1m': 500, '5m': 200}
+2025-11-16 14:59:58,681 - TradingBot - INFO - 🚀 Calling strategy.generate_signal for ETHUSDT
+2025-11-16 15:00:58,404 - TradingBot - INFO - 📊 Calling on_candle_ready for ETHUSDT 1m @ 1763294400000
+2025-11-16 15:00:58,405 - TradingBot - INFO - 🔄 Starting 1m CUSUM calculation for ETHUSDT@1763294400000
+2025-11-16 15:00:58,483 - TradingBot - INFO - ✅ 1m CUSUM ready for ETHUSDT@1763294400000: z=-60.44
+2025-11-16 15:00:58,490 - TradingBot - INFO - ✅ Enriched 1m candle loaded for ETHUSDT@1763294400000
+2025-11-16 15:00:58,490 - TradingBot - INFO - 🎯 on_candle_ready received: ETHUSDT @ 1763294400000
+2025-11-16 15:00:58,490 - TradingBot - INFO - 🔥 handle_candle_ready: ETHUSDT ts=1763294400000
+2025-11-16 15:01:58,573 - TradingBot - INFO - 📊 Calling on_candle_ready for ETHUSDT 1m @ 1763294460000
+2025-11-16 15:01:58,573 - TradingBot - INFO - 🔄 Starting 1m CUSUM calculation for ETHUSDT@1763294460000
+2025-11-16 15:01:58,657 - TradingBot - INFO - ✅ 1m CUSUM ready for ETHUSDT@1763294460000: z=-58.03
+2025-11-16 15:01:58,666 - TradingBot - INFO - ✅ Enriched 1m candle loaded for ETHUSDT@1763294460000
+2025-11-16 15:01:58,667 - TradingBot - INFO - 🎯 on_candle_ready received: ETHUSDT @ 1763294460000
+2025-11-16 15:01:58,667 - TradingBot - INFO - 🔥 handle_candle_ready: ETHUSDT ts=1763294460000
+2025-11-16 15:02:58,442 - TradingBot - INFO - 📊 Calling on_candle_ready for ETHUSDT 1m @ 1763294520000
+2025-11-16 15:02:58,442 - TradingBot - INFO - 🔄 Starting 1m CUSUM calculation for ETHUSDT@1763294520000
+2025-11-16 15:02:58,535 - TradingBot - INFO - ✅ 1m CUSUM ready for ETHUSDT@1763294520000: z=-55.21
+2025-11-16 15:02:58,555 - TradingBot - INFO - ✅ Enriched 1m candle loaded for ETHUSDT@1763294520000
+2025-11-16 15:02:58,555 - TradingBot - INFO - 🎯 on_candle_ready received: ETHUSDT @ 1763294520000
+2025-11-16 15:02:58,556 - TradingBot - INFO - 🔥 handle_candle_ready: ETHUSDT ts=1763294520000
+2025-11-16 15:03:58,424 - TradingBot - INFO - 📊 Calling on_candle_ready for ETHUSDT 1m @ 1763294580000
+2025-11-16 15:03:58,424 - TradingBot - INFO - 🔄 Starting 1m CUSUM calculation for ETHUSDT@1763294580000
+2025-11-16 15:03:58,509 - TradingBot - INFO - ✅ 1m CUSUM ready for ETHUSDT@1763294580000: z=-55.61
+2025-11-16 15:03:58,523 - TradingBot - INFO - ✅ Enriched 1m candle loaded for ETHUSDT@1763294580000
+2025-11-16 15:03:58,523 - TradingBot - INFO - 🎯 on_candle_ready received: ETHUSDT @ 1763294580000
+2025-11-16 15:03:58,523 - TradingBot - INFO - 🔥 handle_candle_ready: ETHUSDT ts=1763294580000
+2025-11-16 15:04:58,453 - TradingBot - INFO - 🔄 Starting 5m indicators calculation for ETHUSDT@1763294400000
+2025-11-16 15:04:58,454 - TradingBot - INFO - 📊 Calling on_candle_ready for ETHUSDT 1m @ 1763294640000
+2025-11-16 15:04:58,454 - TradingBot - INFO - 🔄 Starting 1m CUSUM calculation for ETHUSDT@1763294640000
+2025-11-16 15:04:58,576 - TradingBot - INFO - ✅ 1m CUSUM ready for ETHUSDT@1763294640000: z=-55.09
+2025-11-16 15:04:58,578 - TradingBot - INFO - ✅ Enriched 1m candle loaded for ETHUSDT@1763294640000
+2025-11-16 15:04:58,578 - TradingBot - INFO - 🎯 on_candle_ready received: ETHUSDT @ 1763294640000
+2025-11-16 15:04:58,578 - TradingBot - INFO - 🔥 handle_candle_ready: ETHUSDT ts=1763294640000
+2025-11-16 15:04:58,598 - TradingBot - INFO - ✅ Enriched 5m candle ready and saved to DB for ETHUSDT@1763294400000 (cmo_14=-7.550030321406989, adx_14=10.227416266350431)
+2025-11-16 15:04:58,599 - TradingBot - INFO - 🎯 Calling on_candle_ready AFTER DB write for ETHUSDT @ 1763294400000
+2025-11-16 15:04:58,599 - TradingBot - INFO - 🎯 on_candle_ready received: ETHUSDT @ 1763294400000
+2025-11-16 15:04:58,599 - TradingBot - INFO - 🔥 handle_candle_ready: ETHUSDT ts=1763294400000
+2025-11-16 15:04:58,599 - TradingBot - INFO - 🔍 Detected 5m candle for ETHUSDT, triggering strategy analysis
+2025-11-16 15:04:58,613 - TradingBot - INFO - ✅ Loaded 500 rows from DB for ETHUSDT 1m (limit requested=1000, actual=500)
+2025-11-16 15:04:58,613 - TradingBot - INFO - 📊 market_data ready for ETHUSDT 1m: 500 rows
+2025-11-16 15:04:58,622 - TradingBot - INFO - ✅ Loaded 200 rows from DB for ETHUSDT 5m (limit requested=1000, actual=200)
+2025-11-16 15:04:58,622 - TradingBot - INFO - 📊 5m DataFrame shape: (200, 46)
+2025-11-16 15:04:58,622 - TradingBot - INFO - 📋 5m columns (46): ['symbol', 'ts', 'ts_close', 'open', 'high', 'low', 'close', 'volume', 'count', 'quote', 'finalized', 'checksum', 'created_ts', 'price_change_5', 'trend_momentum_z', 'cmo_14', 'macd_histogram', 'trend_acceleration_ema7', 'regime_volatility', 'bb_width', 'adx_14', 'plus_di_14', 'minus_di_14', 'atr_14_normalized', 'volume_ratio_ema3', 'candle_relative_body', 'upper_shadow_ratio', 'lower_shadow_ratio', 'price_vs_vwap', 'bb_position', 'cusum_1m_recent', 'cusum_1m_quality_score', 'cusum_1m_trend_aligned', 'cusum_1m_price_move', 'is_trend_pattern_1m', 'body_to_range_ratio_1m', 'close_position_in_range_1m', 'cusum', 'cusum_state', 'cusum_zscore', 'cusum_conf', 'cusum_reason', 'cusum_price_mean', 'cusum_price_std', 'cusum_pos', 'cusum_neg']
+2025-11-16 15:04:58,623 - TradingBot - INFO - 🔍 Last row ts: 1763294400000
+2025-11-16 15:04:58,623 - TradingBot - INFO - 📊 market_data ready for ETHUSDT 5m: 200 rows
+2025-11-16 15:04:58,623 - TradingBot - INFO - 📊 market_data ready for ETHUSDT: {'1m': 500, '5m': 200}
+2025-11-16 15:04:58,623 - TradingBot - INFO - 🚀 Calling strategy.generate_signal for ETHUSDT
+2025-11-16 15:05:58,471 - TradingBot - INFO - 📊 Calling on_candle_ready for ETHUSDT 1m @ 1763294700000
+2025-11-16 15:05:58,472 - TradingBot - INFO - 🔄 Starting 1m CUSUM calculation for ETHUSDT@1763294700000
+2025-11-16 15:05:58,554 - TradingBot - INFO - ✅ 1m CUSUM ready for ETHUSDT@1763294700000: z=-58.81
+2025-11-16 15:05:58,567 - TradingBot - INFO - ✅ Enriched 1m candle loaded for ETHUSDT@1763294700000
+2025-11-16 15:05:58,567 - TradingBot - INFO - 🎯 on_candle_ready received: ETHUSDT @ 1763294700000
+2025-11-16 15:05:58,567 - TradingBot - INFO - 🔥 handle_candle_ready: ETHUSDT ts=1763294700000
+2025-11-16 15:05:58,567 - TradingBot - INFO - 🔍 Rechecking 1m trend for cached 5m signal (age: 1s, global_dir=1, global_conf=0.65, status=disagreement)
+2025-11-16 15:05:58,581 - TradingBot - INFO - ✅ Loaded 500 rows from DB for ETHUSDT 1m (limit requested=1000, actual=500)
+2025-11-16 15:05:58,581 - TradingBot - INFO - 📊 market_data ready for ETHUSDT 1m: 500 rows
+2025-11-16 15:05:58,589 - TradingBot - INFO - ✅ Loaded 200 rows from DB for ETHUSDT 5m (limit requested=1000, actual=200)
+2025-11-16 15:05:58,590 - TradingBot - INFO - 📊 5m DataFrame shape: (200, 46)
+2025-11-16 15:05:58,590 - TradingBot - INFO - 📋 5m columns (46): ['symbol', 'ts', 'ts_close', 'open', 'high', 'low', 'close', 'volume', 'count', 'quote', 'finalized', 'checksum', 'created_ts', 'price_change_5', 'trend_momentum_z', 'cmo_14', 'macd_histogram', 'trend_acceleration_ema7', 'regime_volatility', 'bb_width', 'adx_14', 'plus_di_14', 'minus_di_14', 'atr_14_normalized', 'volume_ratio_ema3', 'candle_relative_body', 'upper_shadow_ratio', 'lower_shadow_ratio', 'price_vs_vwap', 'bb_position', 'cusum_1m_recent', 'cusum_1m_quality_score', 'cusum_1m_trend_aligned', 'cusum_1m_price_move', 'is_trend_pattern_1m', 'body_to_range_ratio_1m', 'close_position_in_range_1m', 'cusum', 'cusum_state', 'cusum_zscore', 'cusum_conf', 'cusum_reason', 'cusum_price_mean', 'cusum_price_std', 'cusum_pos', 'cusum_neg']
+2025-11-16 15:05:58,590 - TradingBot - INFO - 🔍 Last row ts: 1763294400000
+2025-11-16 15:05:58,590 - TradingBot - INFO - 📊 market_data ready for ETHUSDT 5m: 200 rows
+2025-11-16 15:06:58,437 - TradingBot - INFO - 📊 Calling on_candle_ready for ETHUSDT 1m @ 1763294760000
+2025-11-16 15:06:58,438 - TradingBot - INFO - 🔄 Starting 1m CUSUM calculation for ETHUSDT@1763294760000
+2025-11-16 15:06:58,520 - TradingBot - INFO - ✅ 1m CUSUM ready for ETHUSDT@1763294760000: z=-55.52
+2025-11-16 15:06:58,532 - TradingBot - INFO - ✅ Enriched 1m candle loaded for ETHUSDT@1763294760000
+2025-11-16 15:06:58,533 - TradingBot - INFO - 🎯 on_candle_ready received: ETHUSDT @ 1763294760000
+2025-11-16 15:06:58,533 - TradingBot - INFO - 🔥 handle_candle_ready: ETHUSDT ts=1763294760000
+2025-11-16 15:06:58,533 - TradingBot - INFO - 🔍 Rechecking 1m trend for cached 5m signal (age: 61s, global_dir=1, global_conf=0.65, status=disagreement)
+2025-11-16 15:06:58,547 - TradingBot - INFO - ✅ Loaded 500 rows from DB for ETHUSDT 1m (limit requested=1000, actual=500)
+2025-11-16 15:06:58,547 - TradingBot - INFO - 📊 market_data ready for ETHUSDT 1m: 500 rows
+2025-11-16 15:06:58,556 - TradingBot - INFO - ✅ Loaded 200 rows from DB for ETHUSDT 5m (limit requested=1000, actual=200)
+2025-11-16 15:06:58,556 - TradingBot - INFO - 📊 5m DataFrame shape: (200, 46)
+2025-11-16 15:06:58,556 - TradingBot - INFO - 📋 5m columns (46): ['symbol', 'ts', 'ts_close', 'open', 'high', 'low', 'close', 'volume', 'count', 'quote', 'finalized', 'checksum', 'created_ts', 'price_change_5', 'trend_momentum_z', 'cmo_14', 'macd_histogram', 'trend_acceleration_ema7', 'regime_volatility', 'bb_width', 'adx_14', 'plus_di_14', 'minus_di_14', 'atr_14_normalized', 'volume_ratio_ema3', 'candle_relative_body', 'upper_shadow_ratio', 'lower_shadow_ratio', 'price_vs_vwap', 'bb_position', 'cusum_1m_recent', 'cusum_1m_quality_score', 'cusum_1m_trend_aligned', 'cusum_1m_price_move', 'is_trend_pattern_1m', 'body_to_range_ratio_1m', 'close_position_in_range_1m', 'cusum', 'cusum_state', 'cusum_zscore', 'cusum_conf', 'cusum_reason', 'cusum_price_mean', 'cusum_price_std', 'cusum_pos', 'cusum_neg']
+2025-11-16 15:06:58,556 - TradingBot - INFO - 🔍 Last row ts: 1763294400000
+2025-11-16 15:06:58,556 - TradingBot - INFO - 📊 market_data ready for ETHUSDT 5m: 200 rows
+2025-11-16 15:07:58,383 - TradingBot - INFO - 📊 Calling on_candle_ready for ETHUSDT 1m @ 1763294820000
+2025-11-16 15:07:58,383 - TradingBot - INFO - 🔄 Starting 1m CUSUM calculation for ETHUSDT@1763294820000
+2025-11-16 15:07:58,448 - TradingBot - INFO - ✅ 1m CUSUM ready for ETHUSDT@1763294820000: z=-55.32
+2025-11-16 15:07:58,467 - TradingBot - INFO - ✅ Enriched 1m candle loaded for ETHUSDT@1763294820000
+2025-11-16 15:07:58,468 - TradingBot - INFO - 🎯 on_candle_ready received: ETHUSDT @ 1763294820000
+2025-11-16 15:07:58,468 - TradingBot - INFO - 🔥 handle_candle_ready: ETHUSDT ts=1763294820000
+2025-11-16 15:07:58,468 - TradingBot - INFO - 🔍 Rechecking 1m trend for cached 5m signal (age: 121s, global_dir=1, global_conf=0.65, status=disagreement)
+2025-11-16 15:07:58,482 - TradingBot - INFO - ✅ Loaded 500 rows from DB for ETHUSDT 1m (limit requested=1000, actual=500)
+2025-11-16 15:07:58,483 - TradingBot - INFO - 📊 market_data ready for ETHUSDT 1m: 500 rows
+2025-11-16 15:07:58,493 - TradingBot - INFO - ✅ Loaded 200 rows from DB for ETHUSDT 5m (limit requested=1000, actual=200)
+2025-11-16 15:07:58,493 - TradingBot - INFO - 📊 5m DataFrame shape: (200, 46)
+2025-11-16 15:07:58,494 - TradingBot - INFO - 📋 5m columns (46): ['symbol', 'ts', 'ts_close', 'open', 'high', 'low', 'close', 'volume', 'count', 'quote', 'finalized', 'checksum', 'created_ts', 'price_change_5', 'trend_momentum_z', 'cmo_14', 'macd_histogram', 'trend_acceleration_ema7', 'regime_volatility', 'bb_width', 'adx_14', 'plus_di_14', 'minus_di_14', 'atr_14_normalized', 'volume_ratio_ema3', 'candle_relative_body', 'upper_shadow_ratio', 'lower_shadow_ratio', 'price_vs_vwap', 'bb_position', 'cusum_1m_recent', 'cusum_1m_quality_score', 'cusum_1m_trend_aligned', 'cusum_1m_price_move', 'is_trend_pattern_1m', 'body_to_range_ratio_1m', 'close_position_in_range_1m', 'cusum', 'cusum_state', 'cusum_zscore', 'cusum_conf', 'cusum_reason', 'cusum_price_mean', 'cusum_price_std', 'cusum_pos', 'cusum_neg']
+2025-11-16 15:07:58,494 - TradingBot - INFO - 🔍 Last row ts: 1763294400000
+2025-11-16 15:07:58,494 - TradingBot - INFO - 📊 market_data ready for ETHUSDT 5m: 200 rows

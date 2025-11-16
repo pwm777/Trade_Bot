@@ -279,28 +279,73 @@ class IndicatorWarmupManager:
     async def warmup_1m_indicators(self, symbol: str, candles: List[Dict]) -> bool:
         """
         Разогрев индикаторов для 1-минутных свечей
-        ✅ ИСПРАВЛЕНИЯ:
-        1. Проверка конфигов
-        2. Логирование результатов
+        ✅ ИСПРАВЛЕНИЯ v2:
+        1. Для gap-данных загружаем контекст из БД
+        2. Проверка конфигов
+        3. Улучшенное логирование результатов
         """
         min_bars = self.warmup_config['1m']['min_bars']
-        if len(candles) < min_bars:
-            self.logger.warning(
-                f"Insufficient 1m candles for {symbol}: {len(candles)} < {min_bars}"
+
+        # ✅ Если новых свечей недостаточно - загружаем контекст
+        needs_context = len(candles) < min_bars
+        context_candles = None  # ✅ ВАЖНО: Инициализируем переменную ДО if
+        new_unique = candles  # ✅ По умолчанию все свечи считаются новыми
+
+        if needs_context:
+            self.logger.info(
+                f"📥 Gap candles ({len(candles)}) < min_bars ({min_bars}), "
+                f"loading context from DB..."
             )
-            return False
+
+            try:
+                # Загружаем последние N свечей из БД для контекста
+                context_candles = await self.market_data_utils.read_candles_1m(
+                    symbol,
+                    last_n=min_bars
+                )
+
+                if context_candles:
+                    # ✅ Фильтруем дубликаты: оставляем только новые свечи
+                    existing_ts = {int(c['ts']) for c in context_candles}
+                    new_unique = [c for c in candles if int(c['ts']) not in existing_ts]
+
+                    # Объединяем: контекст + новые уникальные свечи
+                    full_dataset = context_candles + new_unique
+
+                    self.logger.info(
+                        f"✅ Loaded {len(context_candles)} context + "
+                        f"{len(new_unique)} new = {len(full_dataset)} total candles"
+                    )
+                else:
+                    self.logger.warning(f"⚠️ No context candles in DB, using only new data")
+                    full_dataset = candles
+            except Exception as e:
+                self.logger.error(f"Failed to load context: {e}", exc_info=True)
+                full_dataset = candles
+        else:
+            full_dataset = candles
 
         try:
-            # Сохраняем свечи
-            await self.market_data_utils.upsert_candles_1m(symbol, candles)
+            # Сохраняем только НОВЫЕ свечи (контекст уже в БД)
+            if needs_context and context_candles:
+                await self.market_data_utils.upsert_candles_1m(symbol, new_unique)
+            else:
+                await self.market_data_utils.upsert_candles_1m(symbol, candles)
 
-            # Рассчитываем CUSUM (используется конфиг из market_data_utils)
-            result = await self.market_data_utils.warmup_1m_indicators_and_cusum(symbol, candles)
+            # ✅ Передаем флаг gap-прогрева
+            is_gap = needs_context
+
+            result = await self.market_data_utils.warmup_1m_indicators_and_cusum(
+                symbol,
+                full_dataset,
+                is_gap_warmup=is_gap
+            )
 
             if result.get("ok"):
                 self.logger.info(
                     f"✅ 1m warmup successful for {symbol}: "
-                    f"z={result.get('z', 0.0):.3f}, state={result.get('state', 0)}"
+                    f"z={result.get('z', 0.0):.3f}, state={result.get('state', 0)}, "
+                    f"processed={len(full_dataset)} candles"
                 )
                 return True
             else:
