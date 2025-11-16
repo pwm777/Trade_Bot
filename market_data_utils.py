@@ -1482,14 +1482,20 @@ class MarketDataUtils:
             self.logger.error(f"Failed to upsert candles_1m for {symbol}: {e}", exc_info=True)
             return 0
 
-    async def warmup_1m_indicators_and_cusum(self,symbol: str,
-            bars_1m: List[dict],is_gap_warmup: bool = False ) -> dict:
+    async def warmup_1m_indicators_and_cusum(
+            self,
+            symbol: str,
+            bars_1m: List[dict],
+            is_gap_warmup: bool = False
+    ) -> dict:
         """
         Инкрементальный разогрев 1m индикаторов (идентично онлайн-режиму)
         Избегает look-ahead bias - использует только прошлые данные
+
+        ✅ ИСПРАВЛЕНИЯ v3:
         1. Проверка ОБЩЕГО количества данных в БД (не только новых свечей)
-        2. Лучше логирование
-        3. Валидация final_state на основе РЕАЛЬНЫХ данных в БД
+        2. Гибкий порог min_warmup для gap-ситуаций
+        3. Правильный подсчет доступных данных
         """
         if not bars_1m:
             return {"ok": False, "state": 0, "z": 0.0, "conf": 0.0, "reason": "no_data"}
@@ -1502,16 +1508,13 @@ class MarketDataUtils:
             min_warm = int(self.cfg["features"]["cusum_1m"]["min_warmup"])
             warmup_type = "standard"
 
-        self.logger.info(
-            f"🔥 Starting 1m warmup for {symbol}: "
-            f"{len(bars_1m)} candles, "
-            f"min_warmup={min_warm} ({warmup_type})"
-        )
-        min_warm = int(self.cfg["features"]["cusum_1m"]["min_warmup"])
         saved_count = 0
         error_count = 0
 
-        self.logger.info(f"🔥 Starting 1m warmup for {symbol}: {len(bars_1m)} candles, min_warmup={min_warm}")
+        self.logger.info(
+            f"🔥 Starting 1m warmup for {symbol}: {len(bars_1m)} candles, "
+            f"min_warmup={min_warm} ({warmup_type})"
+        )
 
         # ✅ ПОСЛЕДОВАТЕЛЬНАЯ ОБРАБОТКА КАК В ОНЛАЙН-РЕЖИМЕ
         for i, current_bar in enumerate(bars_1m):
@@ -1545,18 +1548,35 @@ class MarketDataUtils:
                 # Сохраняем сырую свечу как fallback
                 await self.upsert_candles_1m(symbol, [current_bar])
 
-        # ✅ НОВАЯ ЛОГИКА: Проверяем РЕАЛЬНОЕ количество данных в БД
+        # ✅ ИСПРАВЛЕНИЕ: Получаем ТОЧНОЕ количество данных в БД
         try:
-            all_candles_in_db = await self.read_candles_1m(symbol, last_n=min_warm + 10)
-            total_available = len(all_candles_in_db)
+            # Используем COUNT(*) вместо last_n для точности
+            from sqlalchemy import text
+            query = text(f"""
+                SELECT COUNT(*) as total 
+                FROM candles_1m 
+                WHERE symbol = :symbol
+                  AND cusum_zscore IS NOT NULL
+            """)
+
+            async with self.aengine.begin() as conn:
+                result_count = await conn.execute(query, {"symbol": symbol})
+                row = result_count.fetchone()
+                total_available = row[0] if row else 0
+
+            self.logger.debug(
+                f"📊 Total candles with CUSUM in DB: {total_available}"
+            )
+
         except Exception as e:
-            self.logger.error(f"Failed to read candles from DB: {e}")
+            self.logger.error(f"Failed to count candles in DB: {e}")
+            # Fallback: используем количество обработанных свечей
             total_available = len(bars_1m)
 
         # ✅ ФИНАЛЬНОЕ СОСТОЯНИЕ (берем из последней рассчитанной свечи)
         final_state = {"ok": False, "state": 0, "z": 0.0, "conf": 0.0, "reason": "no_data"}
 
-        if saved_count > 0:
+        if saved_count > 0 or total_available >= min_warm:
             last_candles = await self.read_candles_1m(symbol, last_n=1)
             if last_candles:
                 last_candle = last_candles[0]
@@ -1589,6 +1609,7 @@ class MarketDataUtils:
         self.logger.info(
             f"✅ 1m warmup completed:\n"
             f"  Symbol: {symbol}\n"
+            f"  Warmup type: {warmup_type}\n"
             f"  Processed new: {saved_count}/{len(bars_1m)} candles\n"
             f"  Errors: {error_count}\n"
             f"  Total in DB: {total_available} candles\n"
