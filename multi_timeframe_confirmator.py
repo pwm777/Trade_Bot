@@ -403,7 +403,6 @@ class ThreeLevelHierarchicalConfirmator(Detector):
                 self._log_result(result)
                 return result
 
-        # ✅ Если дошли сюда - направления согласованы
         # 8. Комбинируем уверенность
         combined_confidence = self._calculate_weighted_confidence(
             global_signal, trend_signal)
@@ -412,15 +411,22 @@ class ThreeLevelHierarchicalConfirmator(Detector):
                          f"(global: {global_conf:.3f}, trend: {trend_conf:.3f})")
 
         # 9. Формируем итоговый сигнал
-        # ✅ Генерируем correlation_id для успешного сигнала
         from iqts_standards import create_correlation_id
         correlation_id = create_correlation_id()
+
+        # ✅ ПРАВИЛЬНАЯ ЛОГИКА reason:
+        if final_direction == 0:
+            final_reason = "no_trend_signal"
+        elif consistency_reason == "global_flat_confirmed":
+            final_reason = "trend_confirmed"  # Оба согласны, но FLAT
+        else:
+            final_reason = "two_level_confirmed"
 
         out = normalize_signal({
             "ok": True,
             "direction": final_direction,
             "confidence": combined_confidence,
-            "reason": "two_level_confirmed",
+            "reason": final_reason,  # ✅ НЕ "invalid_data"!
             "metadata": {
                 "stage": "two_level_confirmator",
                 "global_timeframe": self.global_timeframe,
