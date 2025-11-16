@@ -467,6 +467,7 @@ def get_default_config():
             }
         },
 
+
         'monitoring': {
             'enabled': True,
             'telegram': {'enabled': False},
