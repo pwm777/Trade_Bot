@@ -1,17 +1,15 @@
 # train_ml_global_v2_windowed.py
 """
-Обучение LightGBM модели с ОКНОМ ИСТОРИИ (30 баров)
-Исправляет критическую ошибку: модель теперь видит последовательность баров, а не один бар
+Обучение LightGBM модели с ОКНОМ ИСТОРИИ
 
 Автор: pwm777
 Дата: 2025-11-17
-Версия: 2.1 (windowed training)
+Версия: 2.1.1 (windowed training)
 
 Изменения:
-- Добавлен lookback window = 30 баров
-- Каждый пример = последние 30 баров истории
-- 22 признака × 30 баров = 660 признаков на вход
-- Сохранена ВСЯ функциональность из v2.0: tau tuning, diagnostics, plots
+- Lookback указывается константой LOOKBACK_WINDOW (по умолчанию 11 баров)
+- Пример = последние N баров истории (окно), признаки разматываются в порядок [t0, t-1, ..., t-(N-1)]
+- Сохранена функциональность: tau tuning, diagnostics, plots, отчёты
 """
 
 import sys
@@ -72,7 +70,7 @@ BASE_FEATURE_NAMES = [
     'lower_shadow_ratio',
     'price_vs_vwap',
     'bb_position',
-    #'cusum_1m_recent',
+    # 'cusum_1m_recent',  # при необходимости можно вернуть
     'cusum_1m_quality_score',
     'cusum_1m_trend_aligned',
     'cusum_1m_price_move',
@@ -94,7 +92,7 @@ def _infer_bars_per_day_from_run_id(run_id: str, default: int = 288) -> int:
     if not m:
         return default
     tf = m.group(1)
-    TIMEFRAME_TO_BARS_LOCAL = {
+    timeframe_to_bars_local = {
         "1m": 1440,
         "3m": 480,
         "5m": 288,
@@ -107,7 +105,7 @@ def _infer_bars_per_day_from_run_id(run_id: str, default: int = 288) -> int:
         "12h": 2,
         "1d": 1,
     }
-    return TIMEFRAME_TO_BARS_LOCAL.get(tf, default)
+    return timeframe_to_bars_local.get(tf, default)
 
 
 # ──────────────────────────────────────────────────────────────
@@ -122,11 +120,11 @@ def thermometer_progress_callback(logger: logging.Logger, width: int = 30, perio
         begin = getattr(env, 'begin_iteration', 0) or 0
         end = getattr(env, 'end_iteration', None)
         if end is None or end <= begin:
-            end = begin + int(env.params.get('num_boost_round', 0) or 0)
-            if end <= begin:
-                end = begin + 1
+            # Пытаемся оценить общее число итераций из окружения (в params num_boost_round обычно нет)
+            total = max(1, (getattr(env, 'iteration', 0) or 0) + 1)
+        else:
+            total = max(1, end - begin)
 
-        total = max(1, end - begin)
         iter_now = int(getattr(env, 'iteration', 0) or 0)
         done = max(0, iter_now - begin + 1)
         pct = min(1.0, max(0.0, done / total))
@@ -247,7 +245,7 @@ class ModelTrainer:
         self.db_dsn = db_dsn
         self.symbol = symbol
         self.lookback = lookback
-        self.timeframe = "5m"  # Добавлено для совместимости
+        self.timeframe = "5m"  # По умолчанию, используется для совместимости
         self.data_loader = DataLoader(db_dsn, symbol)
         self.base_feature_names = BASE_FEATURE_NAMES
 
@@ -259,7 +257,7 @@ class ModelTrainer:
     def _generate_windowed_feature_names(self) -> list:
         """
         Генерирует имена признаков для всех лагов
-        Например: cmo_14_t0, cmo_14_t-1, ..., cmo_14_t-29
+        Например: cmo_14_t0, cmo_14_t-1, ..., cmo_14_t-(lookback-1)
         """
         names = []
         # t0 - текущий бар (самый важный)
@@ -315,7 +313,6 @@ class ModelTrainer:
 
             # ПРАВИЛЬНЫЙ ПОРЯДОК: [t0, t-1, t-2, ..., t-(lookback-1)]
             # где t0 = end_idx-1 (последний бар окна)
-            # t-1 = end_idx-2, и т.д.
             window_ordered = window[::-1]  # Разворачиваем чтобы t0 был первым
 
             # Flatten в правильном порядке: t0_feat1, t0_feat2, ..., t-1_feat1, ...
@@ -346,26 +343,28 @@ class ModelTrainer:
             y_val: np.ndarray,
             proba: np.ndarray,
             bars_per_day: int,
-            spd_min: float = 8.0,  # Более реалистичный диапазон
+            spd_min: float = 8.0,  # Реалистичный диапазон
             spd_max: float = 25.0,
             precision_min: float = 0.60,
             delta: float = 0.08,
             cooldown_bars: int = 2,
+            log_stats: bool = True,  # ← логировать статистики maxp только один раз
     ):
         p_buy, p_sell = proba[:, 1], proba[:, 2]
         maxp = np.maximum(p_buy, p_sell)
 
-        # Более широкий и детальный диапазон tau
+        # Диапазон tau из квантилей
         taus = np.quantile(maxp, np.linspace(0.05, 0.95, 100))
 
-        # ДИАГНОСТИКА: логируем распределение maxp
-        logging.info(f"📊 Max probability stats: "
-                     f"mean={maxp.mean():.3f}, "
-                     f"50%={np.percentile(maxp, 50):.3f}, "
-                     f"90%={np.percentile(maxp, 90):.3f}")
+        # ДИАГНОСТИКА: логируем распределение maxp только по флагу
+        if log_stats:
+            logging.info(f"📊 Max probability stats: "
+                         f"mean={maxp.mean():.3f}, "
+                         f"50%={np.percentile(maxp, 50):.3f}, "
+                         f"90%={np.percentile(maxp, 90):.3f}")
 
-        best_in = None  # (cand, key)  — лучший внутри диапазона
-        best_near = None  # (cand, keyn) — ближайший к центру диапазона
+        best_in = None  # (cand, key)
+        best_near = None  # (cand, keyn)
         target = 0.5 * (spd_min + spd_max)
         n = len(y_val)
 
@@ -552,7 +551,7 @@ class ModelTrainer:
         return pred
 
     def train_model(self, run_id: str, use_scaler: bool = False) -> dict:
-        """Обучение модели с окном истории + полная диагностика (ИСПРАВЛЕНО: без утечки данных)"""
+        """Обучение модели с окном истории + полная диагностика"""
 
         logger.info("\n" + "=" * 60)
         logger.info("ОБУЧЕНИЕ МОДЕЛИ LIGHTGBM (WINDOWED)")
@@ -561,7 +560,7 @@ class ModelTrainer:
         # Подготовка данных
         X, y, w = self.prepare_training_data(run_id)
 
-        # Разделение на train/val/test по времени (70/15/15) - ИСПРАВЛЕНО
+        # Разделение на train/val/test по времени (70/15/15)
         n = len(X)
         train_end = int(n * 0.70)
         val_end = int(n * 0.85)
@@ -607,7 +606,7 @@ class ModelTrainer:
         train_data = lgb.Dataset(X_train_processed, label=y_train, weight=w_train)
         val_data = lgb.Dataset(X_val_processed, label=y_val, reference=train_data)
 
-        # Параметры модели (оптимизированы для большого числа признаков)
+        # Параметры модели
         params = {
             'objective': 'multiclass',
             'num_class': NUM_CLASS,
@@ -645,41 +644,26 @@ class ModelTrainer:
             ],
         )
 
-        # Предсказания на val (для early stopping metrics)
-        if use_scaler and scaler is not None:
-            y_val_pred_proba = model.predict(X_val_processed)
-        else:
-            y_val_pred_proba = model.predict(X_val)
-
+        # Предсказания на val
+        y_val_pred_proba = model.predict(X_val_processed if (use_scaler and scaler is not None) else X_val)
         y_val_pred = y_val_pred_proba.argmax(axis=1)
 
-        # ═══════════════════════════════════════════════════════════
-        # 🎯 ПРЕДСКАЗАНИЯ НА TEST (для tuning порогов) - ИСПРАВЛЕНО
-        # ═══════════════════════════════════════════════════════════
-        if use_scaler and scaler is not None:
-            y_test_pred_proba = model.predict(X_test_processed)
-        else:
-            y_test_pred_proba = model.predict(X_test)
-
+        # Предсказания на test (для tuning)
+        y_test_pred_proba = model.predict(X_test_processed if (use_scaler and scaler is not None) else X_test)
         y_test_pred = y_test_pred_proba.argmax(axis=1)
 
         # ═══════════════════════════════════════════════════════════
-        # 🔍 ДИАГНОСТИКА УТЕЧКИ ДАННЫХ (добавлено)
+        # 🔍 ДИАГНОСТИКА УТЕЧКИ ДАННЫХ
         # ═══════════════════════════════════════════════════════════
         logger.info("\n🔍 ДИАГНОСТИКА УТЕЧКИ ДАННЫХ:")
 
         # Проверка на train (без порогов)
-        if use_scaler and scaler is not None:
-            y_train_pred_proba_diag = model.predict(X_train_processed)
-        else:
-            y_train_pred_proba_diag = model.predict(X_train)
+        y_train_pred_proba_diag = model.predict(X_train_processed if (use_scaler and scaler is not None) else X_train)
         y_train_pred_diag = y_train_pred_proba_diag.argmax(axis=1)
         train_acc = accuracy_score(y_train, y_train_pred_diag)
 
-        # Проверка на val (без порогов)
+        # Проверка на val/test (без порогов)
         val_acc = accuracy_score(y_val, y_val_pred)
-
-        # Проверка на test (без порогов)
         test_acc = accuracy_score(y_test, y_test_pred)
 
         logger.info(f"   Train accuracy (без порогов): {train_acc:.4f}")
@@ -690,7 +674,7 @@ class ModelTrainer:
 
         if train_acc > 0.95:
             logger.error("🚨 КРИТИЧЕСКАЯ УТЕЧКА: train accuracy >95%!")
-            logger.error("   Проверьте признаки на forward-looking данные!")
+            logger.error("   Проверьте признаки/разметку на forward-looking данные!")
 
         if abs(train_acc - val_acc) > 0.20:
             logger.warning(f"⚠️  Сильное переобучение: gap={train_acc - val_acc:.2%}")
@@ -698,24 +682,24 @@ class ModelTrainer:
         # ─────────────────────────────────────────────────────────────
         # 🔍 Диагностика частоты сигналов и подбор порогов (НА TEST!)
         # ─────────────────────────────────────────────────────────────
-        TF2BARS = {"1m": 1440, "3m": 480, "5m": 288, "15m": 96, "30m": 48, "1h": 24}
-        tf = str(getattr(self, "timeframe", "5m")).lower()
-        bars_per_day = TF2BARS.get(tf, 288)
+        # bars_per_day определяем из run_id (если возможно)
+        bars_per_day = _infer_bars_per_day_from_run_id(run_id, default=TIMEFRAME_TO_BARS.get(str(self.timeframe).lower(), 288))
 
         # Перебор precision_min НА ТЕСТОВОМ НАБОРЕ
-        precision_grid = [0.45, 0.50, 0.55, 0.60, 0.65, 0.70, 0.75, 0.80, 0.85, 0.9]
+        precision_grid = [0.45, 0.50, 0.55, 0.60, 0.65, 0.70, 0.75, 0.80, 0.85, 0.90]
         candidates = []
-        for pm in precision_grid:
+        for idx, pm in enumerate(precision_grid):
             try:
                 tau_i, tstats_i = self.tune_tau_for_spd_range(
-                    y_val=np.asarray(y_test),  # ✅ ИСПРАВЛЕНО: используем TEST!
-                    proba=np.asarray(y_test_pred_proba),  # ✅ ИСПРАВЛЕНО
+                    y_val=np.asarray(y_test),
+                    proba=np.asarray(y_test_pred_proba),
                     bars_per_day=bars_per_day,
                     spd_min=8.0,
                     spd_max=20.0,
                     precision_min=pm,
                     delta=0.08,
                     cooldown_bars=2,
+                    log_stats=(idx == 0),  # логировать max-proba stats только в первой итерации
                 )
                 candidates.append({
                     'precision_min': pm,
@@ -771,8 +755,8 @@ class ModelTrainer:
         for off in _tau_offsets:
             tau_x = float(np.clip(tau + off, 0.0, 1.0))
             r = self._eval_decision_metrics(
-                y_true=np.asarray(y_test),  # ✅ ИСПРАВЛЕНО
-                proba=np.asarray(y_test_pred_proba),  # ✅ ИСПРАВЛЕНО
+                y_true=np.asarray(y_test),
+                proba=np.asarray(y_test_pred_proba),
                 tau=tau_x,
                 delta=delta,
                 cooldown_bars=cooldown_bars,
@@ -784,8 +768,8 @@ class ModelTrainer:
         for off in _delta_offsets:
             delta_x = float(max(0.0, delta + off))
             r = self._eval_decision_metrics(
-                y_true=np.asarray(y_test),  # ✅ ИСПРАВЛЕНО
-                proba=np.asarray(y_test_pred_proba),  # ✅ ИСПРАВЛЕНО
+                y_true=np.asarray(y_test),
+                proba=np.asarray(y_test_pred_proba),
                 tau=tau,
                 delta=delta_x,
                 cooldown_bars=cooldown_bars,
@@ -841,7 +825,7 @@ class ModelTrainer:
             'delta': tstats['delta'],
             'cooldown_bars': tstats['cooldown_bars'],
             'bars_per_day': bars_per_day,
-            'test_spd': tstats['spd'],  # ✅ Переименовано с val_spd
+            'test_spd': tstats['spd'],
             'test_precision_macro_buy_sell': tstats['precision_macro_buy_sell'],
             'test_recall_macro_buy_sell': tstats['recall_macro_buy_sell'],
             'test_f1_macro_buy_sell': tstats['f1_macro_buy_sell'],
@@ -866,14 +850,14 @@ class ModelTrainer:
             'decision_policy': decision_policy,
             'precision_min_sweep': precision_min_sweep,
 
-            # Валидационные метрики (для мониторинга обучения)
+            # Валидационные метрики
             'val_accuracy': float(val_acc),
             'val_precision': {name: float(val) for name, val in zip(REPORT_NAMES, prec_val)},
             'val_recall': {name: float(val) for name, val in zip(REPORT_NAMES, rec_val)},
             'val_f1_score': {name: float(val) for name, val in zip(REPORT_NAMES, f1_val)},
             'val_confusion_matrix': cm_val.tolist(),
 
-            # Тестовые метрики (честная оценка) - ДОБАВЛЕНО
+            # Тестовые метрики
             'test_accuracy': float(test_acc),
             'test_precision': {name: float(val) for name, val in zip(REPORT_NAMES, prec_test)},
             'test_recall': {name: float(val) for name, val in zip(REPORT_NAMES, rec_test)},
@@ -898,7 +882,7 @@ class ModelTrainer:
         model_filename = f"models/ml_windowed_{self.symbol.replace('/', '_')}_{datetime.now().strftime('%Y%m%d_%H%M%S')}.joblib"
 
         model_metadata = {
-            'version': '2.1.1',  # ✅ Обновили версию
+            'version': '2.1.1',
             'format': 'windowed_lgb',
             'instrument': self.symbol,
             'exchange': 'Binance',
@@ -909,9 +893,9 @@ class ModelTrainer:
             'trained_at': datetime.now().isoformat(),
             'training_samples': len(X_train),
             'val_samples': len(X_val),
-            'test_samples': len(X_test),  # ✅ ДОБАВЛЕНО
+            'test_samples': len(X_test),
             'val_accuracy': float(val_acc),
-            'test_accuracy': float(test_acc),  # ✅ ДОБАВЛЕНО
+            'test_accuracy': float(test_acc),
             'best_iteration': int(getattr(model, 'best_iteration', 0) or 0),
             'run_id': run_id,
             'decision_policy': decision_policy,
@@ -945,8 +929,8 @@ class ModelTrainer:
             f1_curve = []
             for tcur in tau_grid:
                 s = self._eval_decision_metrics(
-                    y_true=np.asarray(y_test),  # ✅ ИСПРАВЛЕНО
-                    proba=np.asarray(y_test_pred_proba),  # ✅ ИСПРАВЛЕНО
+                    y_true=np.asarray(y_test),
+                    proba=np.asarray(y_test_pred_proba),
                     tau=float(tcur),
                     delta=float(delta),
                     cooldown_bars=int(cooldown_bars),
@@ -992,9 +976,9 @@ class ModelTrainer:
         diag_prefix = Path("models/training_logs") / Path(model_filename).with_suffix('').name
         self.post_training_diagnostics(
             model=model,
-            X_val=X_test,  # ✅ ИСПРАВЛЕНО: используем test
-            y_val=y_test,  # ✅ ИСПРАВЛЕНО
-            y_val_pred_proba=y_test_pred_proba,  # ✅ ИСПРАВЛЕНО
+            X_val=X_test,
+            y_val=y_test,
+            y_val_pred_proba=y_test_pred_proba,
             prefix_path=str(diag_prefix),
             bars_per_day=bars_per_day
         )
@@ -1125,7 +1109,7 @@ class ModelTrainer:
                 f"{prefix_path}_feat_importance.csv", index=False
             )
 
-            # ДОБАВЛЕНО: Таблица для 22 базовых признаков (агрегированная важность)
+            # Агрегированная важность по  базовым признакам (по всем лагам)
             base_feat_importance = {}
             for feature, importance in zip(feat_names, gain):
                 # Извлекаем базовое название признака (убираем _t0, _t-1 и т.д.)
@@ -1134,21 +1118,20 @@ class ModelTrainer:
                 elif '_t0' in feature:
                     base_feat = feature.replace('_t0', '')  # cmo_14_t0 -> cmo_14
                 else:
-                    base_feat = feature  # на случай, если есть признаки без временных меток
+                    base_feat = feature  # fallback
 
                 base_feat_importance[base_feat] = base_feat_importance.get(base_feat, 0) + importance
 
-            # Создаем DataFrame с агрегированной важностью
             df_base_imp = pd.DataFrame({
                 'base_feature': list(base_feat_importance.keys()),
                 'total_gain': list(base_feat_importance.values())
             }).sort_values('total_gain', ascending=False)
 
-            # Сохраняем CSV таблицу с 22 признаками
-            df_base_imp.to_csv(f"{prefix_path}_feat_importance_22_base.csv", index=False)
+            # Сохраняем CSV таблицу с агрегированной важностью
+            df_base_imp.to_csv(f"{prefix_path}_feat_importance_base_aggregated.csv", index=False)
 
-            # Логируем все 22 базовых признака
-            logger.info("🎯 ВАЖНОСТЬ 22 БАЗОВЫХ ПРИЗНАКОВ (агрегировано по всем лагам):")
+            # Логируем динамическое число базовых признаков
+            logger.info(f"🎯 ВАЖНОСТЬ {len(self.base_feature_names)} БАЗОВЫХ ПРИЗНАКОВ (агрегировано по всем лагам):")
             for i, row in df_base_imp.iterrows():
                 logger.info(f"   {i + 1:2d}. {row['base_feature']}: {row['total_gain']:.0f}")
 
@@ -1251,26 +1234,28 @@ class ModelTrainer:
         with open(report_filename, 'w') as f:
             json.dump(report, f, indent=2)
 
-        # Confusion matrix
+        # Confusion matrices (val и test)
         try:
-            cm = np.array(metrics.get('confusion_matrix', []))
-            if cm.size > 0:
-                n = cm.shape[0]
-                prec_map = metrics.get('precision', {})
-                labels = list(prec_map.keys()) if isinstance(prec_map, dict) else None
+            labels = ['BUY', 'SELL', 'HOLD']
 
-                if not labels or len(labels) != n:
-                    if n == 3:
-                        labels = ['BUY', 'SELL', 'HOLD']
-                    else:
-                        labels = [f"class_{i}" for i in range(n)]
-
+            cm_val = np.array(metrics.get('val_confusion_matrix', []))
+            if cm_val.size > 0:
                 plt.figure(figsize=(8, 6))
-                sns.heatmap(cm, annot=True, fmt='d',
+                sns.heatmap(cm_val, annot=True, fmt='d',
                             xticklabels=labels, yticklabels=labels)
-                plt.title('Confusion Matrix')
+                plt.title('Validation Confusion Matrix')
                 plt.tight_layout()
-                plt.savefig(report_filename.replace('.json', '_cm.png'))
+                plt.savefig(report_filename.replace('.json', '_cm_val.png'))
+                plt.close()
+
+            cm_test = np.array(metrics.get('test_confusion_matrix', []))
+            if cm_test.size > 0:
+                plt.figure(figsize=(8, 6))
+                sns.heatmap(cm_test, annot=True, fmt='d',
+                            xticklabels=labels, yticklabels=labels)
+                plt.title('Test Confusion Matrix')
+                plt.tight_layout()
+                plt.savefig(report_filename.replace('.json', '_cm_test.png'))
                 plt.close()
         except Exception as e:
             logger.warning(f"Не удалось создать визуализацию CM: {e}")
@@ -1307,17 +1292,22 @@ def main():
         symbol = "ETHUSDT"
         lookback = LOOKBACK_WINDOW
 
-        # Получить последний run_id
+        # Получить последний run_id ДЛЯ КОНКРЕТНОГО symbol/timeframe
         engine = create_engine(MARKET_DB_DSN)
         with engine.connect() as conn:
-            result = conn.execute(
-                text("SELECT run_id FROM training_dataset_meta ORDER BY created_at DESC LIMIT 1")
-            )
-            row = result.fetchone()
+            row = conn.execute(
+                text("""
+                    SELECT run_id 
+                      FROM training_dataset_meta 
+                     WHERE status='READY' AND symbol=:symbol AND timeframe='5m'
+                     ORDER BY created_at DESC LIMIT 1
+                """),
+                {"symbol": symbol}
+            ).fetchone()
         engine.dispose()
 
         if not row:
-            print("❌ Нет готовых snapshot в training_dataset_meta!")
+            print("❌ Нет готовых snapshot в training_dataset_meta для ETHUSDT/5m!")
             print("   Создайте snapshot через [14] в ml_labeling_tool_v3.py")
             return 1
 
@@ -1337,15 +1327,26 @@ def main():
 
         # Вывод результатов
         print("\n🎯 РЕЗУЛЬТАТЫ ОБУЧЕНИЯ:")
-        print(f"   Точность: {metrics['val_accuracy']:.4f}")
-        print(f"   Precision BUY/SELL/HOLD: "
-              f"{metrics['precision']['BUY']:.4f}/"
-              f"{metrics['precision']['SELL']:.4f}/"
-              f"{metrics['precision']['HOLD']:.4f}")
-        print(f"   Recall BUY/SELL/HOLD: "
-              f"{metrics['recall']['BUY']:.4f}/"
-              f"{metrics['recall']['SELL']:.4f}/"
-              f"{metrics['recall']['HOLD']:.4f}/")
+        print(f"   Val Accuracy:  {metrics['val_accuracy']:.4f}")
+        print(f"   Test Accuracy: {metrics['test_accuracy']:.4f}")
+
+        print(f"\n   VAL Precision BUY/SELL/HOLD: "
+              f"{metrics['val_precision']['BUY']:.4f}/"
+              f"{metrics['val_precision']['SELL']:.4f}/"
+              f"{metrics['val_precision']['HOLD']:.4f}")
+        print(f"   TEST Precision BUY/SELL/HOLD: "
+              f"{metrics['test_precision']['BUY']:.4f}/"
+              f"{metrics['test_precision']['SELL']:.4f}/"
+              f"{metrics['test_precision']['HOLD']:.4f}")
+
+        print(f"\n   VAL Recall BUY/SELL/HOLD: "
+              f"{metrics['val_recall']['BUY']:.4f}/"
+              f"{metrics['val_recall']['SELL']:.4f}/"
+              f"{metrics['val_recall']['HOLD']:.4f}")
+        print(f"   TEST Recall BUY/SELL/HOLD: "
+              f"{metrics['test_recall']['BUY']:.4f}/"
+              f"{metrics['test_recall']['SELL']:.4f}/"
+              f"{metrics['test_recall']['HOLD']:.4f}")
         return 0
 
     except Exception as e:
