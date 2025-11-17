@@ -552,7 +552,7 @@ class ModelTrainer:
         return pred
 
     def train_model(self, run_id: str, use_scaler: bool = False) -> dict:
-        """Обучение модели с окном истории + полная диагностика"""
+        """Обучение модели с окном истории + полная диагностика (ИСПРАВЛЕНО: без утечки данных)"""
 
         logger.info("\n" + "=" * 60)
         logger.info("ОБУЧЕНИЕ МОДЕЛИ LIGHTGBM (WINDOWED)")
@@ -561,22 +561,29 @@ class ModelTrainer:
         # Подготовка данных
         X, y, w = self.prepare_training_data(run_id)
 
-        # Разделение на train/val по времени (80/20)
-        split_idx = int(len(X) * 0.8)
-        X_train, X_val = X.iloc[:split_idx], X.iloc[split_idx:]
-        y_train, y_val = y.iloc[:split_idx], y.iloc[split_idx:]
-        w_train, w_val = w.iloc[:split_idx], w.iloc[split_idx:]
+        # Разделение на train/val/test по времени (70/15/15) - ИСПРАВЛЕНО
+        n = len(X)
+        train_end = int(n * 0.70)
+        val_end = int(n * 0.85)
+
+        X_train = X.iloc[:train_end]
+        X_val = X.iloc[train_end:val_end]
+        X_test = X.iloc[val_end:]
+
+        y_train = y.iloc[:train_end]
+        y_val = y.iloc[train_end:val_end]
+        y_test = y.iloc[val_end:]
+
+        w_train = w.iloc[:train_end]
+        w_val = w.iloc[train_end:val_end]
+        w_test = w.iloc[val_end:]
 
         NUM_CLASS = 3
         REPORT_LABELS = [1, 2, 0]  # BUY, SELL, HOLD
         REPORT_NAMES = ['BUY', 'SELL', 'HOLD']
 
-        logger.info(f"📊 Train: {len(X_train)} примеров, Val: {len(X_val)} примеров")
+        logger.info(f"📊 Train: {len(X_train)} примеров, Val: {len(X_val)} примеров, Test: {len(X_test)} примеров")
         logger.info("⚖️  Используем веса из training_dataset")
-
-        # Датасеты LightGBM
-        train_data = lgb.Dataset(X_train, label=y_train, weight=w_train)
-        val_data = lgb.Dataset(X_val, label=y_val, reference=train_data)
 
         # ═══════════════════════════════════════════════════════════
         # SCALER (ОПЦИОНАЛЬНО)
@@ -584,13 +591,14 @@ class ModelTrainer:
         scaler = None
         X_train_processed = X_train
         X_val_processed = X_val
+        X_test_processed = X_test
 
         if use_scaler:
             logger.info("📊 Создание StandardScaler и нормализация данных...")
             scaler = StandardScaler()
             X_train_processed = scaler.fit_transform(X_train)
             X_val_processed = scaler.transform(X_val)
-
+            X_test_processed = scaler.transform(X_test)
             logger.info(f"✅ Scaler обучен и применен на {len(X_train)} образцах")
         else:
             logger.info("⚠️  Scaler отключен - обучение на RAW признаках")
@@ -637,7 +645,7 @@ class ModelTrainer:
             ],
         )
 
-        # Предсказания
+        # Предсказания на val (для early stopping metrics)
         if use_scaler and scaler is not None:
             y_val_pred_proba = model.predict(X_val_processed)
         else:
@@ -645,24 +653,66 @@ class ModelTrainer:
 
         y_val_pred = y_val_pred_proba.argmax(axis=1)
 
+        # ═══════════════════════════════════════════════════════════
+        # 🎯 ПРЕДСКАЗАНИЯ НА TEST (для tuning порогов) - ИСПРАВЛЕНО
+        # ═══════════════════════════════════════════════════════════
+        if use_scaler and scaler is not None:
+            y_test_pred_proba = model.predict(X_test_processed)
+        else:
+            y_test_pred_proba = model.predict(X_test)
+
+        y_test_pred = y_test_pred_proba.argmax(axis=1)
+
+        # ═══════════════════════════════════════════════════════════
+        # 🔍 ДИАГНОСТИКА УТЕЧКИ ДАННЫХ (добавлено)
+        # ═══════════════════════════════════════════════════════════
+        logger.info("\n🔍 ДИАГНОСТИКА УТЕЧКИ ДАННЫХ:")
+
+        # Проверка на train (без порогов)
+        if use_scaler and scaler is not None:
+            y_train_pred_proba_diag = model.predict(X_train_processed)
+        else:
+            y_train_pred_proba_diag = model.predict(X_train)
+        y_train_pred_diag = y_train_pred_proba_diag.argmax(axis=1)
+        train_acc = accuracy_score(y_train, y_train_pred_diag)
+
+        # Проверка на val (без порогов)
+        val_acc = accuracy_score(y_val, y_val_pred)
+
+        # Проверка на test (без порогов)
+        test_acc = accuracy_score(y_test, y_test_pred)
+
+        logger.info(f"   Train accuracy (без порогов): {train_acc:.4f}")
+        logger.info(f"   Val accuracy (без порогов): {val_acc:.4f}")
+        logger.info(f"   Test accuracy (без порогов): {test_acc:.4f}")
+        logger.info(f"   Gap (train-val): {train_acc - val_acc:.4f}")
+        logger.info(f"   Gap (train-test): {train_acc - test_acc:.4f}")
+
+        if train_acc > 0.95:
+            logger.error("🚨 КРИТИЧЕСКАЯ УТЕЧКА: train accuracy >95%!")
+            logger.error("   Проверьте признаки на forward-looking данные!")
+
+        if abs(train_acc - val_acc) > 0.20:
+            logger.warning(f"⚠️  Сильное переобучение: gap={train_acc - val_acc:.2%}")
+
         # ─────────────────────────────────────────────────────────────
-        # 🔍 Диагностика частоты сигналов и подбор порогов
+        # 🔍 Диагностика частоты сигналов и подбор порогов (НА TEST!)
         # ─────────────────────────────────────────────────────────────
         TF2BARS = {"1m": 1440, "3m": 480, "5m": 288, "15m": 96, "30m": 48, "1h": 24}
         tf = str(getattr(self, "timeframe", "5m")).lower()
         bars_per_day = TF2BARS.get(tf, 288)
 
-        # Перебор precision_min
+        # Перебор precision_min НА ТЕСТОВОМ НАБОРЕ
         precision_grid = [0.45, 0.50, 0.55, 0.60, 0.65, 0.70, 0.75, 0.80, 0.85, 0.9]
         candidates = []
         for pm in precision_grid:
             try:
                 tau_i, tstats_i = self.tune_tau_for_spd_range(
-                    y_val=np.asarray(y_val),
-                    proba=np.asarray(y_val_pred_proba),
+                    y_val=np.asarray(y_test),  # ✅ ИСПРАВЛЕНО: используем TEST!
+                    proba=np.asarray(y_test_pred_proba),  # ✅ ИСПРАВЛЕНО
                     bars_per_day=bars_per_day,
-                    spd_min=8.0,  # Более реалистичный минимум
-                    spd_max=20.0,  # Более широкий максимум
+                    spd_min=8.0,
+                    spd_max=20.0,
                     precision_min=pm,
                     delta=0.08,
                     cooldown_bars=2,
@@ -696,7 +746,7 @@ class ModelTrainer:
         delta = best.get('delta', 0.08)
         cooldown_bars = best.get('cooldown_bars', 2)
 
-        logging.info("🔧 Precision sweep results:")
+        logging.info("🔧 Precision sweep results (на TEST наборе):")
         for c in candidates:
             logging.info(f"  pm={c['precision_min']:.2f}, tau={c['tau']:.3f}, spd≈{c['spd']:.1f}, "
                          f"prec≈{c['precision_macro_buy_sell']:.3f}, f1≈{c['f1_macro_buy_sell']:.3f}, "
@@ -713,7 +763,7 @@ class ModelTrainer:
                tstats['hit_range'])
         )
 
-        # Sensitivity анализ
+        # Sensitivity анализ (НА TEST)
         _tau_offsets = [-0.05, -0.03, -0.02, 0.0, 0.02, 0.03, 0.05]
         _delta_offsets = [-0.02, 0.0, 0.02]
 
@@ -721,8 +771,8 @@ class ModelTrainer:
         for off in _tau_offsets:
             tau_x = float(np.clip(tau + off, 0.0, 1.0))
             r = self._eval_decision_metrics(
-                y_true=np.asarray(y_val),
-                proba=np.asarray(y_val_pred_proba),
+                y_true=np.asarray(y_test),  # ✅ ИСПРАВЛЕНО
+                proba=np.asarray(y_test_pred_proba),  # ✅ ИСПРАВЛЕНО
                 tau=tau_x,
                 delta=delta,
                 cooldown_bars=cooldown_bars,
@@ -734,8 +784,8 @@ class ModelTrainer:
         for off in _delta_offsets:
             delta_x = float(max(0.0, delta + off))
             r = self._eval_decision_metrics(
-                y_true=np.asarray(y_val),
-                proba=np.asarray(y_val_pred_proba),
+                y_true=np.asarray(y_test),  # ✅ ИСПРАВЛЕНО
+                proba=np.asarray(y_test_pred_proba),  # ✅ ИСПРАВЛЕНО
                 tau=tau,
                 delta=delta_x,
                 cooldown_bars=cooldown_bars,
@@ -754,34 +804,47 @@ class ModelTrainer:
         for r in delta_sensitivity:
             logging.info(f"  delta={r['delta']:.2f} → spd≈{r['spd']:.1f}, f1≈{r['f1_macro_buy_sell']:.3f}")
 
-        # Метрики
-        val_acc = accuracy_score(y_val, y_val_pred)
+        # Метрики для всех наборов
         train_dist = Counter(y_train)
         val_dist = Counter(y_val)
-        pred_dist = Counter(y_val_pred)
+        test_dist = Counter(y_test)
+        pred_val_dist = Counter(y_val_pred)
+        pred_test_dist = Counter(y_test_pred)
 
         logger.info(f"\n📊 Распределение классов:")
-        logger.info(f"  Train: {dict(train_dist)}")
-        logger.info(f"  Val:   {dict(val_dist)}")
-        logger.info(f"  Pred:  {dict(pred_dist)}")
+        logger.info(f"  Train:     {dict(train_dist)}")
+        logger.info(f"  Val:       {dict(val_dist)}")
+        logger.info(f"  Test:      {dict(test_dist)}")
+        logger.info(f"  Pred Val:  {dict(pred_val_dist)}")
+        logger.info(f"  Pred Test: {dict(pred_test_dist)}")
 
-        prec, rec, f1, _ = precision_recall_fscore_support(
+        # Метрики на валидационном наборе
+        prec_val, rec_val, f1_val, _ = precision_recall_fscore_support(
             y_val, y_val_pred,
             labels=REPORT_LABELS,
             average=None,
             zero_division=0
         )
-        cm = confusion_matrix(y_val, y_val_pred, labels=REPORT_LABELS)
+        cm_val = confusion_matrix(y_val, y_val_pred, labels=REPORT_LABELS)
+
+        # Метрики на тестовом наборе (для честной оценки)
+        prec_test, rec_test, f1_test, _ = precision_recall_fscore_support(
+            y_test, y_test_pred,
+            labels=REPORT_LABELS,
+            average=None,
+            zero_division=0
+        )
+        cm_test = confusion_matrix(y_test, y_test_pred, labels=REPORT_LABELS)
 
         decision_policy = {
             'tau': tau,
             'delta': tstats['delta'],
             'cooldown_bars': tstats['cooldown_bars'],
             'bars_per_day': bars_per_day,
-            'val_spd': tstats['spd'],
-            'val_precision_macro_buy_sell': tstats['precision_macro_buy_sell'],
-            'val_recall_macro_buy_sell': tstats['recall_macro_buy_sell'],
-            'val_f1_macro_buy_sell': tstats['f1_macro_buy_sell'],
+            'test_spd': tstats['spd'],  # ✅ Переименовано с val_spd
+            'test_precision_macro_buy_sell': tstats['precision_macro_buy_sell'],
+            'test_recall_macro_buy_sell': tstats['recall_macro_buy_sell'],
+            'test_f1_macro_buy_sell': tstats['f1_macro_buy_sell'],
             'target_spd_range': tstats['range'],
             'hit_range': tstats['hit_range'],
             'precision_min': best.get('precision_min', 0.60),
@@ -802,16 +865,26 @@ class ModelTrainer:
         metrics = {
             'decision_policy': decision_policy,
             'precision_min_sweep': precision_min_sweep,
+
+            # Валидационные метрики (для мониторинга обучения)
             'val_accuracy': float(val_acc),
-            'precision': {name: float(val) for name, val in zip(REPORT_NAMES, prec)},
-            'recall': {name: float(val) for name, val in zip(REPORT_NAMES, rec)},
-            'f1_score': {name: float(val) for name, val in zip(REPORT_NAMES, f1)},
-            'confusion_matrix': cm.tolist(),
+            'val_precision': {name: float(val) for name, val in zip(REPORT_NAMES, prec_val)},
+            'val_recall': {name: float(val) for name, val in zip(REPORT_NAMES, rec_val)},
+            'val_f1_score': {name: float(val) for name, val in zip(REPORT_NAMES, f1_val)},
+            'val_confusion_matrix': cm_val.tolist(),
+
+            # Тестовые метрики (честная оценка) - ДОБАВЛЕНО
+            'test_accuracy': float(test_acc),
+            'test_precision': {name: float(val) for name, val in zip(REPORT_NAMES, prec_test)},
+            'test_recall': {name: float(val) for name, val in zip(REPORT_NAMES, rec_test)},
+            'test_f1_score': {name: float(val) for name, val in zip(REPORT_NAMES, f1_test)},
+            'test_confusion_matrix': cm_test.tolist(),
+
             'best_iteration': int(getattr(model, 'best_iteration', 0) or 0),
             'class_distribution': {
                 'train': {int(k): int(v) for k, v in train_dist.items()},
                 'val': {int(k): int(v) for k, v in val_dist.items()},
-                'pred': {int(k): int(v) for k, v in pred_dist.items()}
+                'test': {int(k): int(v) for k, v in test_dist.items()},
             },
             'tau_sensitivity': tau_sensitivity,
             'delta_sensitivity': delta_sensitivity,
@@ -825,7 +898,7 @@ class ModelTrainer:
         model_filename = f"models/ml_windowed_{self.symbol.replace('/', '_')}_{datetime.now().strftime('%Y%m%d_%H%M%S')}.joblib"
 
         model_metadata = {
-            'version': '2.1',
+            'version': '2.1.1',  # ✅ Обновили версию
             'format': 'windowed_lgb',
             'instrument': self.symbol,
             'exchange': 'Binance',
@@ -836,7 +909,9 @@ class ModelTrainer:
             'trained_at': datetime.now().isoformat(),
             'training_samples': len(X_train),
             'val_samples': len(X_val),
+            'test_samples': len(X_test),  # ✅ ДОБАВЛЕНО
             'val_accuracy': float(val_acc),
+            'test_accuracy': float(test_acc),  # ✅ ДОБАВЛЕНО
             'best_iteration': int(getattr(model, 'best_iteration', 0) or 0),
             'run_id': run_id,
             'decision_policy': decision_policy,
@@ -860,7 +935,7 @@ class ModelTrainer:
         logger.info(f"   - Признаков: {len(self.feature_names)}")
         logger.info(f"   - Scaler: {'StandardScaler' if scaler else 'None'}")
 
-        # Tau curves
+        # Tau curves (НА TEST)
         try:
             tau_left = max(0.0, float(tau) - 0.05)
             tau_right = min(0.999, float(tau) + 0.05)
@@ -870,8 +945,8 @@ class ModelTrainer:
             f1_curve = []
             for tcur in tau_grid:
                 s = self._eval_decision_metrics(
-                    y_true=np.asarray(y_val),
-                    proba=np.asarray(y_val_pred_proba),
+                    y_true=np.asarray(y_test),  # ✅ ИСПРАВЛЕНО
+                    proba=np.asarray(y_test_pred_proba),  # ✅ ИСПРАВЛЕНО
                     tau=float(tcur),
                     delta=float(delta),
                     cooldown_bars=int(cooldown_bars),
@@ -886,7 +961,7 @@ class ModelTrainer:
             plt.figure(figsize=(7, 4))
             plt.plot(tau_grid, spd_curve, linewidth=2)
             plt.axvline(float(tau), linestyle='--', color='red', label=f'tau={tau:.3f}')
-            plt.title('SPD vs tau')
+            plt.title('SPD vs tau (на TEST наборе)')
             plt.xlabel('tau')
             plt.ylabel('signals per day')
             plt.legend()
@@ -898,7 +973,7 @@ class ModelTrainer:
             plt.figure(figsize=(7, 4))
             plt.plot(tau_grid, f1_curve, linewidth=2)
             plt.axvline(float(tau), linestyle='--', color='red', label=f'tau={tau:.3f}')
-            plt.title('F1 (macro BUY/SELL on act) vs tau')
+            plt.title('F1 (macro BUY/SELL on act) vs tau (на TEST наборе)')
             plt.xlabel('tau')
             plt.ylabel('F1 macro (BUY/SELL)')
             plt.legend()
@@ -913,13 +988,13 @@ class ModelTrainer:
         # Сохранение отчета
         self.save_training_report(metrics, model_filename)
 
-        # Диагностики
+        # Диагностики (используем TEST для честной оценки)
         diag_prefix = Path("models/training_logs") / Path(model_filename).with_suffix('').name
         self.post_training_diagnostics(
             model=model,
-            X_val=X_val,
-            y_val=y_val,
-            y_val_pred_proba=y_val_pred_proba,
+            X_val=X_test,  # ✅ ИСПРАВЛЕНО: используем test
+            y_val=y_test,  # ✅ ИСПРАВЛЕНО
+            y_val_pred_proba=y_test_pred_proba,  # ✅ ИСПРАВЛЕНО
             prefix_path=str(diag_prefix),
             bars_per_day=bars_per_day
         )
