@@ -361,9 +361,9 @@ class MLGlobalDetector(Detector):
             direction_map = {0: 0, 1: 1, 2: -1}
             predicted_direction = direction_map.get(prediction_idx, 0)
 
-            # По умолчанию — режим без политики (fallback к min_confidence)
+            # ✅ ИНИЦИАЛИЗАЦИЯ ПЕРЕМЕННЫХ ДО УСЛОВИЙ
+            ok = False
             reason = "no_trend_signal"
-            ok = (predicted_direction == 0)
 
             policy = self.decision_policy or self.model_metadata.get("decision_policy")
             if policy:
@@ -381,7 +381,6 @@ class MLGlobalDetector(Detector):
                 if act and cooldown_bars > 0 and last_ts is not None:
                     if self._last_signal_ts is not None:
                         # Сколько баров прошло с последнего сигнала
-                        # Считаем по количеству баров в df, у которых timestamp > last_signal_ts
                         try:
                             ts_col = 'timestamp' if 'timestamp' in df.columns else 'ts'
                             passed_bars = int((df[ts_col] > self._last_signal_ts).sum())
@@ -391,12 +390,19 @@ class MLGlobalDetector(Detector):
                             act = False
                             reason = "cooldown_active"
 
+                # ✅ ОПРЕДЕЛЯЕМ ok И reason НА ОСНОВЕ act
                 if predicted_direction == 0:
                     ok = True
                     reason = "no_trend_signal"
                 else:
                     ok = act
-                    reason = "trend_confirmed" if ok else (reason if reason == "cooldown_active" else "below_tau_delta")
+                    if ok:
+                        reason = "trend_confirmed"
+                    elif reason == "cooldown_active":
+                        # Уже установлен выше
+                        pass
+                    else:
+                        reason = "weak_trend_signal"  # ✅ Валидный ReasonCode
 
                 # Если сработал сигнал — фиксируем ts
                 if ok and predicted_direction != 0 and last_ts is not None:
