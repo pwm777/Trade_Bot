@@ -637,7 +637,7 @@ class ModelTrainer:
             train_data,
             valid_sets=[val_data],
             valid_names=['valid_0'],
-            num_boost_round=2200,
+            num_boost_round=1500,
             callbacks=[
                 thermometer_progress_callback(logger, width=30, period=10),
                 lgb.early_stopping(stopping_rounds=50, first_metric_only=True),
