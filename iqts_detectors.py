@@ -135,12 +135,33 @@ class MLGlobalTrendDetector(Detector):
 
                 # ✅ ПРОВЕРКА: если ML вернул ошибку
                 if not signal['ok']:
-                    self.logger.warning(f"⚠️ ML returned ok=False, reason={signal.get('reason')}")
-                    if self.use_fallback:
-                        self.logger.warning("🔄 Switching to fallback detector...")
-                        if not self.using_fallback:
+                    reason = signal.get('reason', 'unknown')
+                    self.logger.info(f"⚠️ ML returned ok=False, reason={reason}")
+
+                    # ✅ Fallback активируем ТОЛЬКО при настоящих ошибках
+                    ERROR_REASONS = {
+                        'invalid_data_structure',
+                        'missing_timeframe',
+                        'empty_dataframe',
+                        'missing_required_columns',
+                        'insufficient_warmup',
+                        'model_not_loaded',
+                        'feature_extraction_error',
+                        'scaling_error',
+                        'prediction_error'
+                    }
+
+                    if reason in ERROR_REASONS:
+                        self.logger.warning(f"🔄 ML detector error ({reason}), switching to fallback...")
+                        if self.use_fallback and not self.using_fallback:
                             self._activate_fallback()
-                        return await self.analyze(data)  # Рекурсивный вызов с fallback
+                            return await self.analyze(data)  # Рекурсивный вызов с fallback
+                        else:
+                            # Fallback уже активен или недоступен
+                            pass
+                    else:
+                        # Это не ошибка, а нормальное состояние (weak_trend_signal, no_trend_signal, cooldown_active)
+                        self.logger.debug(f"✅ ML returned valid state: {reason}")
 
                 enriched_metadata = {
                     **signal.get('metadata', {}),
