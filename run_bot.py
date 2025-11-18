@@ -12,7 +12,6 @@ from __future__ import annotations
 import asyncio
 import logging
 import signal
-from collections import  deque
 from dataclasses import dataclass, field
 from typing import Optional, Any, List, Dict, cast, Literal, Callable
 from market_data_utils import ensure_market_schema
@@ -859,8 +858,6 @@ class BotLifecycleManager:
                                      quality_detector_config.get("global_timeframe", "5m")),
                 trend_timeframe=cast(Literal["1m", "5m", "15m", "1h"],
                                     quality_detector_config.get("trend_timeframe", "1m")),
-                entry_timeframe=cast(Literal["1m", "5m", "15m", "1h"],
-                                    quality_detector_config.get("entry_timeframe", "1m"))
             )
 
             logger.info("AdaptiveExitManager created successfully")

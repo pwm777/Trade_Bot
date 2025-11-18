@@ -129,7 +129,6 @@ class EnhancedTradingBot:
         self.exit_manager = AdaptiveExitManager(
             global_timeframe=global_tf,
             trend_timeframe=trend_tf,
-            entry_timeframe=entry_tf
         )
 
         self.logger.info(f"✅ AdaptiveExitManager created: global={global_tf}, trend={trend_tf}, entry={entry_tf}")
