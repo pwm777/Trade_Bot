@@ -60,7 +60,6 @@ class ExitSignalDetector:
             'high_trend_weak': 0.65,
             'high_global_hint': 0.5,
             'medium_trend_weak': 0.65,
-            'medium_entry_rev': 0.6,
             'medium_trend_hint': 0.5,
             'low_total': 0.6
         }
@@ -161,92 +160,66 @@ class ExitSignalDetector:
 
     def _check_cascading_reversal(self, signals: Dict, position_direction: DirectionLiteral) -> Dict:
         """
-        КЛЮЧЕВОЙ МЕТОД: Проверка каскадного разворота
+        КЛЮЧЕВОЙ МЕТОД: Проверка каскадного разворота (2 уровня)
 
         Логика:
-        1. Младшие таймфреймы (1m) развернулись (detected=True)
-        2. Их суммарная сила достаточна
+        1. Младший таймфрейм (1m) развернулся (detected=True)
+        2. Его сила достаточна
         3. Глобальный (5m) показывает намек на разворот (>30%)
-
         → Разворот 5m НЕИЗБЕЖЕН, выходим упреждающе!
         """
         global_rev = signals['global_reversal']
         trend_rev = signals['trend_reversal']
         trend_weak = signals['trend_weakening']
-        entry_rev = signals['entry_reversal']
+        # ❌ УДАЛИТЬ: entry_rev = signals['entry_reversal']
 
-        # ═══════════════════════════════════════════════════════════════
-        # УСЛОВИЕ 1: Все три уровня показывают проблему (detected=True)
-        # ═══════════════════════════════════════════════════════════════
-
+        # УСЛОВИЕ 1: Оба уровня показывают проблему
         all_levels_detect = (
                 (trend_rev['detected'] or trend_weak['detected']) and
                 global_rev['detected']
         )
 
-        # ═══════════════════════════════════════════════════════════════
-        # УСЛОВИЕ 2: Суммарная уверенность всех трех уровней
-        # ═══════════════════════════════════════════════════════════════
+        # УСЛОВИЕ 2: Суммарная уверенность ДВУХ уровней
+        trend_confidence = max(trend_rev['confidence'], trend_weak['confidence'])
+        total_confidence = trend_confidence + global_rev['confidence']  # ✅ Только 2 уровня
 
-        total_confidence = (
-                entry_rev['confidence'] +
-                max(trend_rev['confidence'], trend_weak['confidence']) +
-                global_rev['confidence']
-        )
-
-        # ═══════════════════════════════════════════════════════════════
-        # УСЛОВИЕ 3: Глобальный показывает значимый намек
-        # ═══════════════════════════════════════════════════════════════
-
+        # УСЛОВИЕ 3: Глобальный показывает намек
         global_hint = global_rev['confidence'] >= self.cascading_thresholds['global_hint']
 
-        # ═══════════════════════════════════════════════════════════════
-        # УСЛОВИЕ 4: Взвешенная сила младших таймфреймов
-        # ═══════════════════════════════════════════════════════════════
+        # УСЛОВИЕ 4: Тренд достаточно силен
+        trend_strong = trend_confidence >= self.cascading_thresholds['lower_tf_min']
 
-        lower_tf_weighted = (
-                0.75 * max(trend_rev['confidence'], trend_weak['confidence'])
-        )
+        # УСЛОВИЕ 5: Взвешенная сила (только 1m, без весов)
+        lower_tf_weighted = trend_confidence  # ✅ Только 1m
 
-        # Хотя бы один из младших достаточно силен
-        any_lower_strong = (
-                max(trend_rev['confidence'], trend_weak['confidence']) >= self.cascading_thresholds['lower_tf_min']
-        )
-
-        # ═══════════════════════════════════════════════════════════════
-        # ФИНАЛЬНОЕ РЕШЕНИЕ: Каскадный выход
-        # ═══════════════════════════════════════════════════════════════
-
+        # ФИНАЛЬНОЕ РЕШЕНИЕ
         cascading_exit = (
                 all_levels_detect and
-                total_confidence >= self.cascading_thresholds['all_levels_sum'] and
+                total_confidence >= 0.65 and  # ✅ Снижено с 0.7 (было для 3 уровней)
                 global_hint and
-                (lower_tf_weighted >= self.cascading_thresholds['lower_tf_weighted'] or any_lower_strong)
+                trend_strong
         )
 
         if cascading_exit:
             self.logger.info(
                 f"🔥 КАСКАДНЫЙ РАЗВОРОТ: "
-                f"1m={max(trend_rev['confidence'], trend_weak['confidence']):.2f} + "
-                f"5m={global_rev['confidence']:.2f} = {total_confidence:.2f} "
-                f"(weighted_lower={lower_tf_weighted:.2f})"
+                f"1m={trend_confidence:.2f} + "
+                f"5m={global_rev['confidence']:.2f} = {total_confidence:.2f}"
             )
 
             return {
                 'detected': True,
                 'urgency': 'high',
                 'reason': 'cascading_reversal',
-                'confidence': total_confidence / 3.0,  # Средняя по трем уровням
+                'confidence': total_confidence / 2.0,  # ✅ Средняя по ДВУМ уровням
                 'details': {
                     'type': 'cascading',
-                    'entry_confidence': entry_rev['confidence'],
-                    'trend_confidence': max(trend_rev['confidence'], trend_weak['confidence']),
+                    'trend_confidence': trend_confidence,
                     'global_confidence': global_rev['confidence'],
                     'total_confidence': total_confidence,
-                    'lower_tf_weighted': lower_tf_weighted,
                     'interpretation': (
-                        f"Младшие таймфреймы развернули старший: "
-                        f"1m({max(trend_rev['confidence'], trend_weak['confidence']):.2f}) → "
+                        f"Младший таймфрейм разворачивает старший: "
+                        f"1m({trend_confidence:.2f}) → "
                         f"5m({global_rev['confidence']:.2f}). "
                         f"Разворот 5m неизбежен, выход упреждающий!"
                     )
@@ -271,7 +244,6 @@ class ExitSignalDetector:
         global_rev = signals['global_reversal']
         trend_weak = signals['trend_weakening']
         trend_rev = signals['trend_reversal']
-        entry_rev = signals['entry_reversal']
 
         # ═══════════════════════════════════════════════════════════════
         # ПРИОРИТЕТ 0: КАСКАДНЫЙ РАЗВОРОТ (УПРЕЖДАЮЩИЙ ВЫХОД)
@@ -296,8 +268,7 @@ class ExitSignalDetector:
 
         total_confidence_weighted = (
                 weights['global'] * global_rev['confidence'] +
-                weights['trend'] * trend_weak['confidence'] +
-                weights['entry'] * entry_rev['confidence']
+                weights['trend'] * trend_weak['confidence']
         )
 
         should_exit = False
@@ -332,18 +303,6 @@ class ExitSignalDetector:
                 confidence = trend_weak['confidence']
 
         # ───────────────────────────────────────────────────────────────
-        # ПРИОРИТЕТ 3: СРЕДНИЙ - Разворот на младших уровнях
-        # ───────────────────────────────────────────────────────────────
-
-        elif entry_rev['detected'] and entry_rev['confidence'] > self.classic_thresholds['medium_entry_rev']:
-            trend_conf = max(trend_rev['confidence'], trend_weak['confidence'])
-            if trend_conf > self.classic_thresholds['medium_trend_hint']:
-                should_exit = True
-                urgency = 'medium'
-                reason = 'entry_reversal_with_trend_weakness'
-                confidence = (entry_rev['confidence'] + trend_conf) / 2.0
-
-        # ───────────────────────────────────────────────────────────────
         # ПРИОРИТЕТ 4: НИЗКИЙ - Общая взвешенная уверенность
         # ───────────────────────────────────────────────────────────────
 
@@ -362,7 +321,6 @@ class ExitSignalDetector:
                 'global_reversal': global_rev,
                 'trend_weakening': trend_weak,
                 'trend_reversal': trend_rev,
-                'entry_reversal': entry_rev,
                 'position_direction': position_direction,
                 'total_weighted': total_confidence_weighted
             }
