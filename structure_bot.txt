@@ -164,10 +164,10 @@ run_bot.py
     │   └── get_component_health() → Dict
     ├── Обработка событий:
     │   ├── add_event_handler() → None
-    │   └── handle_candle_ready() → None
+    │   └── handle_candle_ready() → None 
     └── Управление данными:
         └── Интеграция с DataProvider.update_from_candle_event()
-
+		
 
 ==================================================================
 
@@ -257,11 +257,11 @@ trade_bot.py
     └── История:
         └── get_closed_positions() → List[Dict]
 =========================================================================
-
+		
 Модуль: ImprovedQualityTrendSystem.py
 Типы данных:
 ImprovedQualityTrendSystem.py
-├── RegimeType = Literal["strong_uptrend", "weak_uptrend", "strong_downtrend",
+├── RegimeType = Literal["strong_uptrend", "weak_uptrend", "strong_downtrend", 
 │                       "weak_downtrend", "sideways", "uncertain"]
 ├── VolumeProfileType = Literal["high", "normal", "low"]
 │
@@ -452,7 +452,7 @@ ml_global_detector.py
 ├── ✅ Rich metadata в DetectorSignal (probabilities, lookback, policy, vector_dim)
 └── ✅ Потокобезопасность: нет shared mutable state (за исключением _last_signal_ts — один детектор на экземпляр)
 ===========================================================================
-
+	
 Модуль: iqts_detectors.py
 Базовый класс:
 
@@ -512,7 +512,7 @@ iqts_detectors.py
         └── reset_state() → None
 
 ==================================================================
-
+		
 Модуль: multi_timeframe_confirmator.py
 multi_timeframe_confirmator.py
 └── ThreeLevelHierarchicalConfirmator (Detector)
@@ -593,7 +593,7 @@ multi_timeframe_confirmator.py
 ImprovedQualityTrendSystem → ThreeLevelHierarchicalConfirmator.analyze()
     ├── global_detector.analyze() → MLGlobalTrendDetector (5m)
     └── trend_detector.analyze() → RoleBasedOnlineTrendDetector (1m)
-========================================================
+========================================================		
 Модуль: market_aggregator.py
 Абстрактный базовый класс:
 market_aggregator.py
@@ -866,7 +866,7 @@ MarketHistoryManager → Binance API
 Процесс загрузки истории:
 BotLifecycleManager.start()
     → _create_history_manager() → MarketHistoryManager
-    → load_history()
+    → load_history() 
         → BinanceDataFetcher.fetch_candles()
         → IndicatorWarmupManager.warmup_*_indicators()
         → MarketDataUtils.upsert_candles_*m()
@@ -905,13 +905,13 @@ BacktestMarketAggregatorFixed (режим BACKTEST)
     → Инкрементальный расчет индикаторов
     → Эмуляция рыночных событий
 
-
+		
 BotLifecycleManager.start()
     → _create_components()
         → _create_strategy() → ImprovedQualityTrendSystem
         → _create_main_bot() → EnhancedTradingBot
             → DataProviderFromDB
-            → ExecutionEngineFromExchangeManager
+            → ExecutionEngineFromExchangeManager  
             → MainBotAdapter
 
 EnhancedTradingBot.start()
@@ -927,7 +927,7 @@ ThreeLevelHierarchicalConfirmator.analyze()
 EnhancedTradingBot._process_trade_signal()
     → execution_engine.place_order() → ExecutionEngineFromExchangeManager.place_order()
     → position_tracker.add_position() → PositionTracker.add_position()
-================================================================
+================================================================	
 
 Модуль: iqts_standards.py
 Типы данных и литералы:
@@ -1262,7 +1262,7 @@ EnhancedTradingBot._manage_existing_positions()
 
 Комиссии и slippage:
 ├── MARKET ордера: 0.1% slippage + 0.04% taker fee
-├── LIMIT ордера: 0% slippage + 0.02% maker fee
+├── LIMIT ордера: 0% slippage + 0.02% maker fee  
 ├── STOP ордера: 0.01% slippage + 0.04% taker fee
 └── BACKTEST режим: минимальный slippage для точности
 
@@ -1422,7 +1422,7 @@ exit_system.py
 │   ├── Компоненты-детекторы:
 │   │   ├── global_detector: MLGlobalTrendDetector (с fallback)
 │   │   ├── trend_detector: RoleBasedOnlineTrendDetector (роль="trend")
-│   │
+│   │  
 │   │
 │   ├── Пороги:
 │   │   ├── cascading_thresholds: Dict (all_levels_sum, global_hint, lower_tf_min...)
@@ -1520,7 +1520,7 @@ signal_validator.py
             ├── Автоматическая валидация возвращаемых значений
             ├── Поддержка async и sync функций
             └── Логирование ошибок и предупреждений
-
+			
 Глобальный доступ:
 ├── Глобальный валидатор (singleton):
 │   ├── _global_validator: Optional[SignalValidator]
@@ -1538,7 +1538,7 @@ signal_validator.py
         → DetectorSignal → SignalValidator.validate_detector_signal()
 
     ImprovedQualityTrendSystem.analyze_and_trade()
-        → @validate_signal('trade_iqts')
+        → @validate_signal('trade_iqts') 
         → TradeSignalIQTS → SignalValidator.validate_trade_signal_iqts()
 
     PositionManager.handle_signal()
@@ -2375,4 +2375,26 @@ CREATE TABLE trades (
                         exit_reason TEXT,
                         bars_in_trade INTEGER
                     )
+```
+
+### positions_risk_audit
+```
+CREATE TABLE IF NOT EXISTS positions_risk_audit (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    position_id INTEGER NOT NULL,
+    correlation_id TEXT,
+    validation_hash TEXT,
+    risk_context_json TEXT,  -- ✅ Полный RiskContext
+    planned_sl DECIMAL(18,8),
+    actual_sl DECIMAL(18,8),
+    sl_slippage_pct DECIMAL(18,8),  -- ✅ Процент slippage
+    planned_tp DECIMAL(18,8),
+    actual_tp DECIMAL(18,8),
+    tp_slippage_pct DECIMAL(18,8),
+    planned_position_size DECIMAL(18,8),
+    actual_position_size DECIMAL(18,8),
+    size_slippage_pct DECIMAL(18,8),
+    timestamp_ms BIGINT NOT NULL,
+    FOREIGN KEY (position_id) REFERENCES positions(id)
+)
 ```

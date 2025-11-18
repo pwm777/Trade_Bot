@@ -58,6 +58,7 @@ class TradingLogger:
     2. CRUD операции с БД (positions, orders, symbols)
     3. Асинхронные очереди для производительности
     4. Автоматическое логирование при изменении данных
+    5. ✅ НОВОЕ: Отслеживание risk_context и slippage
     """
 
     def __init__(self,
@@ -89,7 +90,10 @@ class TradingLogger:
             "errors_logged": 0,
             "positions_created": 0,
             "orders_created": 0,
-            "duplicates_rejected": 0
+            "duplicates_rejected": 0,
+            # ✅ НОВАЯ СТАТИСТИКА
+            "risk_context_logged": 0,
+            "high_slippage_alerts": 0
         }
 
         # Async components (lazy initialization)
@@ -138,6 +142,301 @@ class TradingLogger:
 
         except Exception as e:
             self.logger.error(f"Error processing market event: {e}")
+
+    def record_signal_with_risk_context(self,
+                                        signal: 'TradeSignalIQTS',
+                                        order_req: Optional['OrderReq'] = None,
+                                        **kwargs) -> None:
+        """
+        Запись сигнала с полным risk_context и вычислением slippage.
+
+        Args:
+            signal: TradeSignalIQTS с risk_context
+            order_req: OrderReq (если уже создан)
+            **kwargs: Дополнительные поля для логирования
+        """
+        try:
+            import json
+
+            symbol = signal.get('symbol', 'UNKNOWN')
+            risk_ctx = signal.get('risk_context', {})
+
+            # Базовые данные сигнала
+            signal_data = {
+                "symbol": symbol,
+                "signal_type": "TRADE_SIGNAL_WITH_RISK_CONTEXT",
+                "timestamp_ms": get_current_timestamp_ms(),
+                "direction": str(signal.get('direction', 'UNKNOWN')),
+                "entry_price": signal.get('entry_price', 0.0),
+                "confidence": signal.get('confidence', 0.0),
+                "stops_precomputed": signal.get('stops_precomputed', False),
+                "validation_hash": signal.get('validation_hash'),
+                "correlation_id": kwargs.get('correlation_id'),
+                **kwargs
+            }
+
+            # ✅ Сериализация risk_context
+            if risk_ctx:
+                signal_data['risk_context_json'] = json.dumps(risk_ctx)
+                signal_data['planned_position_size'] = risk_ctx.get('position_size', 0)
+                signal_data['planned_sl'] = risk_ctx.get('initial_stop_loss', 0)
+                signal_data['planned_tp'] = risk_ctx.get('take_profit', 0)
+                self._stats["risk_context_logged"] += 1
+
+            # ✅ Вычисление slippage (если есть order_req)
+            slippage_data = {}
+            if risk_ctx and order_req:
+                slippage_data = self._calculate_slippage(risk_ctx, order_req)
+                signal_data.update(slippage_data)
+
+                # Alert при высоком slippage
+                if slippage_data.get('slippage_pct', 0) > 0.1:
+                    self._stats["high_slippage_alerts"] += 1
+                    self.logger.warning(
+                        f"⚠️ High SL slippage for {symbol}: {slippage_data['slippage_pct']:.2f}% "
+                        f"(planned: {slippage_data['planned_sl']:.2f}, "
+                        f"actual: {slippage_data['actual_sl']:.2f})"
+                    )
+
+                    # Опциональный callback для alerts
+                    if self.on_alert:
+                        try:
+                            self.on_alert("high_slippage", {
+                                "symbol": symbol,
+                                "slippage_pct": slippage_data['slippage_pct'],
+                                "planned_sl": slippage_data['planned_sl'],
+                                "actual_sl": slippage_data['actual_sl']
+                            })
+                        except Exception as e:
+                            self.logger.error(f"Alert callback failed: {e}")
+
+            # Запись в лог
+            self._write_log_entry("signal", signal_data, kwargs.get("dedup_key"))
+
+            self.logger.debug(
+                f"Logged signal with risk_context: {symbol}, "
+                f"size={signal_data.get('planned_position_size', 0):.4f}, "
+                f"slippage={slippage_data.get('slippage_pct', 0):.4f}%"
+            )
+
+        except Exception as e:
+            self.logger.error(f"Error recording signal with risk_context: {e}", exc_info=True)
+            self.record_error({
+                "error_type": "signal_risk_context_logging",
+                "symbol": signal.get('symbol', 'UNKNOWN'),
+                "error": str(e)
+            })
+
+    def _calculate_slippage(self, risk_ctx: Dict[str, Any], order_req: 'OrderReq') -> Dict[str, float]:
+        """
+        Вычисление slippage между запланированными и фактическими уровнями.
+
+        Args:
+            risk_ctx: RiskContext с planned значениями
+            order_req: OrderReq с actual значениями
+
+        Returns:
+            Dict с slippage метриками
+        """
+        slippage_data = {}
+
+        try:
+            # Stop Loss slippage
+            planned_sl = risk_ctx.get('initial_stop_loss', 0)
+            actual_sl = order_req.get('stop_price', 0)
+
+            if planned_sl > 0 and actual_sl > 0:
+                slippage_abs = abs(float(actual_sl) - planned_sl)
+                slippage_pct = (slippage_abs / planned_sl * 100)
+
+                slippage_data.update({
+                    'planned_sl': planned_sl,
+                    'actual_sl': float(actual_sl),
+                    'sl_slippage_abs': slippage_abs,
+                    'slippage_pct': slippage_pct
+                })
+
+            # Take Profit slippage (опционально)
+            planned_tp = risk_ctx.get('take_profit', 0)
+            actual_tp = order_req.get('take_profit_price', 0)  # Если есть в OrderReq
+
+            if planned_tp > 0 and actual_tp > 0:
+                tp_slippage_abs = abs(float(actual_tp) - planned_tp)
+                tp_slippage_pct = (tp_slippage_abs / planned_tp * 100)
+
+                slippage_data.update({
+                    'planned_tp': planned_tp,
+                    'actual_tp': float(actual_tp),
+                    'tp_slippage_abs': tp_slippage_abs,
+                    'tp_slippage_pct': tp_slippage_pct
+                })
+
+            # Position Size slippage
+            planned_size = risk_ctx.get('position_size', 0)
+            actual_size = order_req.get('qty', 0)
+
+            if planned_size > 0 and actual_size > 0:
+                size_slippage_abs = abs(float(actual_size) - planned_size)
+                size_slippage_pct = (size_slippage_abs / planned_size * 100)
+
+                slippage_data.update({
+                    'planned_position_size': planned_size,
+                    'actual_position_size': float(actual_size),
+                    'size_slippage_abs': size_slippage_abs,
+                    'size_slippage_pct': size_slippage_pct
+                })
+
+        except Exception as e:
+            self.logger.warning(f"Error calculating slippage: {e}")
+
+        return slippage_data
+
+    async def record_signal_with_risk_context_async(self,
+                                                    signal: 'TradeSignalIQTS',
+                                                    order_req: Optional['OrderReq'] = None,
+                                                    **kwargs) -> None:
+        """Асинхронная версия record_signal_with_risk_context"""
+        if not self.enable_async:
+            self.record_signal_with_risk_context(signal, order_req, **kwargs)
+            return
+
+        await self._ensure_async_started()
+
+        # Подготовка данных для очереди
+        signal_data = {
+            "signal": signal,
+            "order_req": order_req,
+            "kwargs": kwargs,
+            "_type": "risk_context_signal"
+        }
+
+        await self._enqueue_async("signal", signal_data)
+
+    def record_position_risk_audit(self,
+                                   position_id: int,
+                                   signal: 'TradeSignalIQTS',
+                                   order_req: 'OrderReq') -> None:
+        """
+        ✅ НОВОЕ: Запись аудита risk_context для позиции в отдельную таблицу.
+
+        Args:
+            position_id: ID позиции в БД
+            signal: Исходный TradeSignalIQTS
+            order_req: Созданный OrderReq
+        """
+        try:
+            import json
+
+            risk_ctx = signal.get('risk_context', {})
+
+            # Вычисление slippage
+            slippage_data = self._calculate_slippage(risk_ctx, order_req)
+
+            audit_record = {
+                'position_id': position_id,
+                'correlation_id': signal.get('correlation_id') or order_req.get('correlation_id'),
+                'validation_hash': signal.get('validation_hash'),
+                'risk_context_json': json.dumps(risk_ctx) if risk_ctx else None,
+                'planned_sl': slippage_data.get('planned_sl', 0),
+                'actual_sl': slippage_data.get('actual_sl', 0),
+                'sl_slippage_pct': slippage_data.get('slippage_pct', 0),
+                'planned_tp': slippage_data.get('planned_tp', 0),
+                'actual_tp': slippage_data.get('actual_tp', 0),
+                'tp_slippage_pct': slippage_data.get('tp_slippage_pct', 0),
+                'planned_position_size': slippage_data.get('planned_position_size', 0),
+                'actual_position_size': slippage_data.get('actual_position_size', 0),
+                'size_slippage_pct': slippage_data.get('size_slippage_pct', 0),
+                'timestamp_ms': get_current_timestamp_ms()
+            }
+
+            normalized = self._normalize_params(audit_record)
+
+            # Вставка в таблицу positions_risk_audit
+            with self.trades_engine.begin() as conn:
+                conn.execute(text("""
+                    INSERT INTO positions_risk_audit (
+                        position_id, correlation_id, validation_hash, risk_context_json,
+                        planned_sl, actual_sl, sl_slippage_pct,
+                        planned_tp, actual_tp, tp_slippage_pct,
+                        planned_position_size, actual_position_size, size_slippage_pct,
+                        timestamp_ms
+                    ) VALUES (
+                        :position_id, :correlation_id, :validation_hash, :risk_context_json,
+                        :planned_sl, :actual_sl, :sl_slippage_pct,
+                        :planned_tp, :actual_tp, :tp_slippage_pct,
+                        :planned_position_size, :actual_position_size, :size_slippage_pct,
+                        :timestamp_ms
+                    )
+                """), normalized)
+
+            self.logger.info(f"✅ Risk context audit recorded for position {position_id}")
+
+        except Exception as e:
+            self.logger.error(f"Error recording risk context audit: {e}", exc_info=True)
+            self.record_error({
+                "error_type": "risk_audit_insert",
+                "position_id": position_id,
+                "error": str(e)
+            })
+
+    def get_slippage_statistics(self,
+                                symbol: Optional[str] = None,
+                                days: int = 7) -> Dict[str, Any]:
+        """
+        ✅ НОВОЕ: Получение статистики по slippage.
+
+        Args:
+            symbol: Фильтр по символу (опционально)
+            days: Период в днях
+
+        Returns:
+            Dict со статистикой
+        """
+        try:
+            from_ts = get_current_timestamp_ms() - (days * 24 * 60 * 60 * 1000)
+
+            where_clause = "WHERE a.timestamp_ms >= :from_ts"
+            params = {"from_ts": from_ts}
+
+            if symbol:
+                where_clause += " AND p.symbol = :symbol"
+                params["symbol"] = symbol
+
+            with self.trades_engine.connect() as conn:
+                result = conn.execute(text(f"""
+                    SELECT 
+                        COUNT(*) as total_trades,
+                        AVG(a.sl_slippage_pct) as avg_sl_slippage_pct,
+                        MAX(a.sl_slippage_pct) as max_sl_slippage_pct,
+                        AVG(a.size_slippage_pct) as avg_size_slippage_pct,
+                        SUM(CASE WHEN a.sl_slippage_pct > 0.1 THEN 1 ELSE 0 END) as high_slippage_count
+                    FROM positions_risk_audit a
+                    JOIN positions p ON a.position_id = p.id
+                    {where_clause}
+                """), params).mappings().first()
+
+                if result:
+                    return {
+                        "period_days": days,
+                        "symbol": symbol or "ALL",
+                        "total_trades": result['total_trades'] or 0,
+                        "avg_sl_slippage_pct": round(result['avg_sl_slippage_pct'] or 0, 4),
+                        "max_sl_slippage_pct": round(result['max_sl_slippage_pct'] or 0, 4),
+                        "avg_size_slippage_pct": round(result['avg_size_slippage_pct'] or 0, 4),
+                        "high_slippage_count": result['high_slippage_count'] or 0,
+                        "high_slippage_rate": (
+                            round((result['high_slippage_count'] or 0) / (result['total_trades'] or 1) * 100, 2)
+                        )
+                    }
+        except Exception as e:
+            self.logger.error(f"Error getting slippage statistics: {e}")
+
+        return {
+            "period_days": days,
+            "symbol": symbol or "ALL",
+            "total_trades": 0,
+            "error": str(e)
+        }
 
     def on_connection_state_change(self, state: Dict[str, Any]) -> None:
         """Обработчик изменения состояния соединения"""
@@ -1140,6 +1439,38 @@ class TradingLogger:
                         created_ts BIGINT DEFAULT (strftime('%s','now')*1000),
                         updated_ts BIGINT DEFAULT (strftime('%s','now')*1000)
                     )
+                """))
+                # positions_risk_audit
+                conn.execute(text("""
+                    CREATE TABLE IF NOT EXISTS positions_risk_audit (
+                        id INTEGER PRIMARY KEY AUTOINCREMENT,
+                        position_id INTEGER NOT NULL,
+                        correlation_id TEXT,
+                        validation_hash TEXT,
+                        risk_context_json TEXT,
+                        planned_sl DECIMAL(18,8),
+                        actual_sl DECIMAL(18,8),
+                        sl_slippage_pct DECIMAL(18,8),
+                        planned_tp DECIMAL(18,8),
+                        actual_tp DECIMAL(18,8),
+                        tp_slippage_pct DECIMAL(18,8),
+                        planned_position_size DECIMAL(18,8),
+                        actual_position_size DECIMAL(18,8),
+                        size_slippage_pct DECIMAL(18,8),
+                        timestamp_ms BIGINT NOT NULL,
+                        FOREIGN KEY (position_id) REFERENCES positions(id)
+                    )
+                """))
+
+                # Индекс для быстрого поиска
+                conn.execute(text("""
+                    CREATE INDEX IF NOT EXISTS idx_risk_audit_position_id 
+                    ON positions_risk_audit(position_id)
+                """))
+
+                conn.execute(text("""
+                    CREATE INDEX IF NOT EXISTS idx_risk_audit_timestamp 
+                    ON positions_risk_audit(timestamp_ms DESC)
                 """))
 
         except Exception as e:
