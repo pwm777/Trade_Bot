@@ -4,14 +4,15 @@ signal_validator.py - Централизованная валидация сиг
 """
 
 from __future__ import annotations
-from typing import Dict, Any, Optional, Tuple, List, Union
+from typing import Dict, Any, Optional, Tuple, List, Union, Callable
 from decimal import Decimal
-import logging
-
+import asyncio
 from iqts_standards import (
     StrategySignal, TradeSignalIQTS, DetectorSignal,
     Direction, DirectionLiteral, OrderReq
 )
+import functools
+import logging
 
 logger = logging.getLogger(__name__)
 
@@ -641,3 +642,143 @@ def quick_validate_order_req(order_req: OrderReq) -> bool:
     """Быстрая проверка OrderReq (возвращает bool)"""
     return bool(get_validator().validate_order_req(order_req))
 
+
+
+
+class ValidationLayer:
+    DETECTOR = "detector"
+    STRATEGY = "strategy"
+    RISK = "risk"
+    TRADE_SIGNAL = "trade_signal"
+    ORDER = "order"
+
+
+class ValidationResult:
+    def __init__(self, valid: bool, errors: Optional[List[str]] = None,
+                 warnings: Optional[List[str]] = None, layer: Optional[str] = None):
+        self.valid = valid
+        self.errors = errors or []
+        self.warnings = warnings or []
+        self.layer = layer
+
+    def merge(self, other: 'ValidationResult') -> 'ValidationResult':
+        return ValidationResult(
+            valid=self.valid and other.valid,
+            errors=self.errors + other.errors,
+            warnings=self.warnings + other.warnings,
+            layer=other.layer or self.layer
+        )
+
+
+class SignalValidator:
+    def __init__(self, strict_mode: bool = False, logger: Optional[logging.Logger] = None):
+        self.strict_mode = strict_mode
+        self.logger = logger or logging.getLogger(self.__class__.__name__)
+
+    # === Основной метод для TradeSignalIQTS ===
+    def validate_trade_signal(self, signal: Dict[str, Any]) -> ValidationResult:
+        errors, warnings = [], []
+        direction = signal.get("direction")
+
+        if direction is None:
+            errors.append("Missing direction")
+
+        if signal.get("entry_price", 0) <= 0:
+            errors.append("Invalid entry_price")
+
+        if signal.get("stops_precomputed", False):
+            rc = signal.get("risk_context")
+            if not rc:
+                errors.append("Risk context required when stops_precomputed=True")
+            else:
+                for k in ["position_size", "initial_stop_loss", "take_profit"]:
+                    if k not in rc:
+                        errors.append(f"RiskContext missing {k}")
+                if rc.get("position_size", 0) <= 0:
+                    errors.append("position_size must be > 0")
+        else:
+            # backward compatibility (может быть от legacy кода)
+            for k in ["stop_loss", "take_profit", "position_size"]:
+                if k not in signal:
+                    warnings.append(f"Legacy signal missing {k} (non-precomputed mode)")
+
+        return ValidationResult(valid=not errors and (not self.strict_mode or not warnings),
+                                errors=errors, warnings=warnings, layer=ValidationLayer.TRADE_SIGNAL)
+
+    # === ORDER VALIDATION (упрощенная) ===
+    def validate_order_req(self, order: Dict[str, Any]) -> ValidationResult:
+        errors = []
+        if order.get("qty", 0) <= 0:
+            errors.append("Order qty must be > 0")
+        if order.get("symbol") is None:
+            errors.append("Order missing symbol")
+        if order.get("side") not in ("BUY", "SELL"):
+            errors.append(f"Invalid side {order.get('side')}")
+        return ValidationResult(valid=not errors, errors=errors, layer=ValidationLayer.ORDER)
+
+
+def validate_signal(signal_type: str,
+                    layer: str,
+                    strict: bool = False):
+    """
+    Декоратор: автоматически вызывает валидатор до выполнения метода.
+    Ожидает, что экземпляр имеет атрибут `validator`.
+    """
+
+    def decorator(func: Callable):
+        @functools.wraps(func)
+        async def async_wrapper(self, *args, **kwargs):
+            validator: SignalValidator = getattr(self, "validator", None)
+            if not validator:
+                return await func(self, *args, **kwargs)
+
+            # Извлекаем сигнал (первая структура dict в аргументах или ключ trade_signal)
+            candidate = None
+            for a in args:
+                if isinstance(a, dict) and "direction" in a:
+                    candidate = a
+                    break
+            if candidate is None:
+                candidate = kwargs.get("trade_signal") or kwargs.get("signal")
+
+            if candidate and signal_type == "trade_iqts":
+                vr = validator.validate_trade_signal(candidate)
+                if not vr.valid:
+                    validator.logger.error(f"Validation failed ({layer}): {vr.errors}")
+                    return None
+                if vr.warnings:
+                    validator.logger.warning(f"Signal warnings ({layer}): {vr.warnings}")
+
+            return await func(self, *args, **kwargs)
+
+        @functools.wraps(func)
+        def sync_wrapper(self, *args, **kwargs):
+            validator: SignalValidator = getattr(self, "validator", None)
+            if not validator:
+                return func(self, *args, **kwargs)
+
+            candidate = None
+            for a in args:
+                if isinstance(a, dict) and "direction" in a:
+                    candidate = a
+                    break
+            if candidate is None:
+                candidate = kwargs.get("trade_signal") or kwargs.get("signal")
+
+            if candidate and signal_type == "trade_iqts":
+                vr = validator.validate_trade_signal(candidate)
+                if not vr.valid:
+                    validator.logger.error(f"Validation failed ({layer}): {vr.errors}")
+                    return None
+                if vr.warnings:
+                    validator.logger.warning(f"Signal warnings ({layer}): {vr.warnings}")
+
+            return func(self, *args, **kwargs)
+
+        # Автоматически различаем async/sync
+        if asyncio.iscoroutinefunction(func):
+            return async_wrapper
+        else:
+            return sync_wrapper
+
+    return decorator
