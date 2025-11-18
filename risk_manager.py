@@ -547,7 +547,7 @@ class EnhancedRiskManager:
 
     def calculate_position_size(
             self,
-            signal: Dict[str, Any],
+            signal: DetectorSignal,
             current_price: float,
             atr: float,
             account_balance: float
