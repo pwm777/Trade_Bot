@@ -144,7 +144,7 @@ class SignalValidator:
 
             # Проверка hash (опционально, для аудита)
             if 'validation_hash' in signal:
-                # TODO: Реализовать compute_risk_hash() если нужна проверка
+                # Реализовать compute_risk_hash() если нужна проверка
                 pass
 
         # 1. Обязательные поля
