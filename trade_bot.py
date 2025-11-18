@@ -4,8 +4,8 @@ PositionTracker — отслеживает активные и закрытые 
 Адаптивный выход (AdaptiveExitManager) — динамически управляет стоп-лоссами и триггерами закрытия.
 Мониторинг и уведомления — Telegram/email-алерты через EnhancedMonitoringSystem.
 Гибкая конфигурация — поддержка таймфреймов, управления рисками, ограничений.
-Бот работает в цикле: получает данные → анализирует → генерирует сигналы →
-исполняет сделки → управляет позициями → логирует результаты."""
+Бот получает данные, потом анализирует их, и генерирует сигналы, →
+исполняет сделки, → управляет позициями → логирует результаты."""
 
 from collections import deque
 import asyncio
@@ -18,7 +18,6 @@ from abc import ABC, abstractmethod
 from ImprovedQualityTrendSystem import ImprovedQualityTrendSystem
 from enhanced_monitoring import EnhancedMonitoringSystem, enhanced_telegram_alert, enhanced_email_alert
 from iqts_standards import ( TradeSignalIQTS,  TradeResult, REQUIRED_OHLCV_COLUMNS)
-# Импорт системы выхода
 from exit_system import AdaptiveExitManager
 
 
