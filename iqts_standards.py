@@ -10,8 +10,7 @@
 
 from __future__ import annotations
 from typing import (
-    TypedDict, Literal, Protocol, Dict, Any, List, Optional, runtime_checkable, Callable, cast
-    Union
+    TypedDict, Literal, Protocol, Dict, Any, List, Optional, runtime_checkable, Callable, cast, Union
 )
 import pandas as pd
 from enum import Enum
@@ -1185,6 +1184,7 @@ def normalize_direction_v2(value: Any) -> Direction:
         >>> normalize_direction_v2(1)
         Direction.BUY
         >>> normalize_direction_v2(-1)
+        """
 def validate_market_data(data: Dict[Timeframe, pd.DataFrame]) -> bool:
     """Light-версия без тяжёлых pandas-операций"""
     if not isinstance(data, dict) or not data:
