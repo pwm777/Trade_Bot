@@ -19,6 +19,7 @@ from ImprovedQualityTrendSystem import ImprovedQualityTrendSystem
 from enhanced_monitoring import EnhancedMonitoringSystem, enhanced_telegram_alert, enhanced_email_alert
 from iqts_standards import ( TradeSignalIQTS,  TradeResult, REQUIRED_OHLCV_COLUMNS)
 from exit_system import AdaptiveExitManager
+from risk_manager import EnhancedRiskManager
 
 
 def _basic_validate_market_data(market_data: Dict[str, pd.DataFrame]) -> bool:
@@ -100,12 +101,13 @@ class EnhancedTradingBot:
     Обеспечивает основной торговый цикл и управление позициями.
     """
     def __init__(self, config: Dict, data_provider: DataProvider,
-                 execution_engine: ExecutionEngine, trading_system: Optional[ImprovedQualityTrendSystem] = None):
+                 execution_engine: ExecutionEngine, trading_system: Optional[ImprovedQualityTrendSystem] = None,
+                 risk_manager: Optional[EnhancedRiskManager] = None ):
         self.config = config
         self.data_provider = data_provider
         self.execution_engine = execution_engine
         self.logger = self._setup_logging()
-
+        self.risk_manager = risk_manager or EnhancedRiskManager(config.get('risk', {}))
         # ⭐ ИСПРАВЛЕНО: Используем переданную стратегию или создаем новую
         if trading_system is not None:
             self.trading_system = trading_system
@@ -339,14 +341,45 @@ class EnhancedTradingBot:
 
     async def _process_trade_signal(self, trade_signal: TradeSignalIQTS):
         """
-        ✅ ОБНОВЛЕНО: Обработка через PositionManager.
+        ✅ ОБНОВЛЕНО: Обработка через PositionManager с поддержкой risk_context.
 
         Flow:
-            1. Конвертация TradeSignalIQTS → TradeSignal
-            2. PositionManager.handle_signal() → OrderReq
-            3. ExchangeManager.place_order(OrderReq)
+            1. Валидация risk_context (если stops_precomputed=True)
+            2. Конвертация TradeSignalIQTS → TradeSignal
+            3. PositionManager.handle_signal() → OrderReq
+            4. ExchangeManager.place_order(OrderReq)
+            5. Логирование с отслеживанием slippage
         """
         try:
+            # ✅ ШАГ 0: Валидация risk_context (если stops_precomputed)
+            if trade_signal.get('stops_precomputed', False):
+                risk_ctx = trade_signal.get('risk_context')
+                if not risk_ctx:
+                    self.logger.error("❌ stops_precomputed=True but risk_context is missing")
+                    return
+
+                # Проверка обязательных полей в risk_context
+                required_fields = ['position_size', 'initial_stop_loss', 'take_profit']
+                missing_fields = [f for f in required_fields if f not in risk_ctx]
+                if missing_fields:
+                    self.logger.error(
+                        f"❌ Invalid risk_context: missing fields {missing_fields}"
+                    )
+                    return
+
+                # Проверка положительности
+                if risk_ctx.get('position_size', 0) <= 0:
+                    self.logger.error(
+                        f"❌ Invalid position_size in risk_context: {risk_ctx.get('position_size')}"
+                    )
+                    return
+
+                self.logger.debug(
+                    f"✅ risk_context validated: size={risk_ctx['position_size']:.4f}, "
+                    f"SL={risk_ctx['initial_stop_loss']:.2f}, "
+                    f"TP={risk_ctx['take_profit']:.2f}"
+                )
+
             # ✅ ШАГ 1: Конвертация сигнала
             pm_signal = self._convert_iqts_signal_to_trade_signal(trade_signal)
 
@@ -354,20 +387,29 @@ class EnhancedTradingBot:
                 self.logger.debug("Signal conversion failed or FLAT signal")
                 return
 
-            # Логирование
-            direction_int = trade_signal.get('direction', 0)
-            direction_str = 'BUY' if direction_int == 1 else 'SELL' if direction_int == -1 else 'FLAT'
+            # ✅ Улучшенное логирование с поддержкой Direction enum
+            direction = trade_signal.get('direction', 0)
+
+            # Поддержка Direction enum
+            if hasattr(direction, 'side'):  # Direction enum
+                direction_str = direction.side  # "BUY", "SELL", "FLAT"
+                direction_int = direction.value  # 1, -1, 0
+            elif isinstance(direction, int):
+                direction_int = direction
+                direction_str = {1: 'BUY', -1: 'SELL', 0: 'FLAT'}.get(direction_int, 'UNKNOWN')
+            else:
+                direction_str = str(direction)
+                direction_int = {'BUY': 1, 'SELL': -1, 'FLAT': 0}.get(direction_str, 0)
+
             entry_price = trade_signal.get('entry_price', 0.0)
             confidence = trade_signal.get('confidence', 0.0)
 
             self.logger.info(
                 f"Processing trade signal: {direction_str} (dir={direction_int}) "
-                f"@ {entry_price:.5f} "
-                f"(confidence: {confidence:.2f})"
+                f"@ {entry_price:.5f} (confidence: {confidence:.2f})"
             )
 
             # ✅ ШАГ 2: PositionManager обрабатывает сигнал
-            # Получаем PositionManager через execution_engine
             position_manager = getattr(self.execution_engine, 'position_manager', None)
 
             if not position_manager:
@@ -377,6 +419,7 @@ class EnhancedTradingBot:
                 )
                 # Fallback: прямой вызов execution_engine
                 execution_result = await self.execution_engine.place_order(trade_signal)
+                order_req = None  # Не доступен в fallback режиме
             else:
                 # ✅ ПРАВИЛЬНЫЙ ПУТЬ: Через PositionManager
                 self.logger.info("📊 Delegating to PositionManager.handle_signal()")
@@ -405,11 +448,49 @@ class EnhancedTradingBot:
                     'message': 'Order sent to exchange via PositionManager'
                 }
 
-            # ✅ ШАГ 4: Обработка результата (если нужно дополнительное отслеживание)
+            # ✅ ШАГ 4: Логирование с risk_context и slippage
+            if trade_signal.get('stops_precomputed', False) and order_req:
+                risk_ctx = trade_signal['risk_context']
+
+                # Вычисление slippage для stop_loss
+                planned_sl = risk_ctx.get('initial_stop_loss', 0)
+                actual_sl = order_req.get('stop_price', 0)
+
+                if planned_sl > 0 and actual_sl > 0:
+                    slippage_abs = abs(float(actual_sl) - planned_sl)
+                    slippage_pct = (slippage_abs / planned_sl * 100)
+
+                    if slippage_pct > 0.1:
+                        self.logger.warning(
+                            f"⚠️ High SL slippage detected: {slippage_pct:.2f}% "
+                            f"(planned: {planned_sl:.2f}, actual: {actual_sl:.2f})"
+                        )
+                    else:
+                        self.logger.debug(
+                            f"SL slippage: {slippage_pct:.4f}% "
+                            f"(planned: {planned_sl:.2f}, actual: {actual_sl:.2f})"
+                        )
+
+                    # ✅ ОПЦИОНАЛЬНО: Сохранение в TradingLogger (если есть доступ)
+                    if hasattr(self, 'trading_logger'):
+                        try:
+                            self.trading_logger.record_signal(
+                                symbol=pm_signal['symbol'],
+                                signal_type="TRADE_EXECUTED_WITH_RISK_CONTEXT",
+                                risk_context=risk_ctx,
+                                order_req=order_req,
+                                slippage_pct=slippage_pct,
+                                validation_hash=trade_signal.get('validation_hash'),
+                                correlation_id=pm_signal.get('correlation_id')
+                            )
+                        except Exception as e:
+                            self.logger.warning(f"Failed to log risk_context: {e}")
+
+            # ✅ ШАГ 5: Обработка результата
             if execution_result.get('success', False):
                 position_id = execution_result.get('position_id')
 
-                # exit_tracking для AdaptiveExitManager (если используется)
+                # exit_tracking для AdaptiveExitManager
                 exit_tracking = {
                     'peak_price': entry_price,
                     'breakeven_moved': False,
@@ -421,7 +502,10 @@ class EnhancedTradingBot:
                     'execution_result': execution_result,
                     'opened_at': datetime.now(),
                     'status': 'open',
-                    'exit_tracking': exit_tracking
+                    'exit_tracking': exit_tracking,
+                    # ✅ НОВОЕ: Сохраняем risk_context для аудита
+                    'risk_context': trade_signal.get('risk_context'),
+                    'stops_precomputed': trade_signal.get('stops_precomputed', False)
                 }
 
                 self.active_positions[position_id] = position_data
@@ -431,6 +515,9 @@ class EnhancedTradingBot:
                 self.logger.info(
                     f"✅ Trade executed: {direction_str} position {position_id}"
                 )
+
+                # ✅ НОВОЕ: Отправка уведомления с risk_context
+                await self._send_trade_notification(trade_signal, execution_result)
             else:
                 self.logger.error(
                     f"❌ Order execution failed: {execution_result.get('error', 'Unknown error')}"

@@ -177,13 +177,49 @@ class TradingLogger:
     # === Logging Methods ===
 
     def record_signal(self, symbol: str, signal_type: str, **kwargs) -> None:
-        """Синхронная запись сигнала."""
+        """Синхронная запись сигнала с поддержкой risk_context."""
+
+        # ✅ НОВАЯ ЛОГИКА: Обработка risk_context и расчёт slippage
+        risk_context = kwargs.get('risk_context')
+        order_req = kwargs.get('order_req')  # Если передан вместе с сигналом
+
+        slippage_data = {}
+        if risk_context and order_req:
+            # Вычисляем slippage для stop_loss
+            planned_sl = risk_context.get('initial_stop_loss')
+            actual_sl = order_req.get('stop_price')
+
+            if planned_sl and actual_sl:
+                slippage = abs(float(actual_sl) - planned_sl)
+                slippage_pct = (slippage / planned_sl * 100) if planned_sl > 0 else 0.0
+
+                slippage_data = {
+                    'planned_sl': planned_sl,
+                    'actual_sl': float(actual_sl),
+                    'slippage_abs': slippage,
+                    'slippage_pct': slippage_pct
+                }
+
+                # Alert при высоком slippage
+                if slippage_pct > 0.1:
+                    self.logger.warning(
+                        f"⚠️ High SL slippage for {symbol}: {slippage_pct:.2f}% "
+                        f"(planned: {planned_sl}, actual: {actual_sl})"
+                    )
+
         signal_data = {
             "symbol": symbol,
             "signal_type": signal_type,
             "timestamp_ms": get_current_timestamp_ms(),
-            **kwargs
+            **kwargs,
+            **slippage_data  # ✅ Добавляем slippage данные
         }
+
+        # Сериализация risk_context для БД (если есть)
+        if risk_context:
+            import json
+            signal_data['risk_context_json'] = json.dumps(risk_context)
+
         self._write_log_entry("signal", signal_data, kwargs.get("dedup_key"))
 
     def record_trade(self, trade_data: Dict[str, Any], **kwargs) -> None:

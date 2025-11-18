@@ -10,7 +10,7 @@ import logging
 
 from iqts_standards import (
     StrategySignal, TradeSignalIQTS, DetectorSignal,
-    DirectionLiteral, OrderReq
+    Direction, DirectionLiteral, OrderReq
 )
 
 logger = logging.getLogger(__name__)
@@ -112,41 +112,87 @@ class SignalValidator:
         return ValidationResult(valid, errors, warnings)
 
     # === TradeSignalIQTS валидация ===
-    
+
     def validate_trade_signal_iqts(self, signal: TradeSignalIQTS) -> ValidationResult:
         """
         Валидация TradeSignalIQTS (выходной сигнал ImprovedQualityTrendSystem)
-        
+
         Проверяет:
         - Обязательные поля (direction, entry_price, position_size, stop_loss, take_profit)
         - Положительные значения цен и размера
         - Risk/Reward соотношение
         - Согласованность стопов с направлением
+        - ✅ НОВОЕ: Поддержка stops_precomputed + risk_context
         """
         errors = []
         warnings = []
-        
+
+        # ✅ НОВАЯ ПРОВЕРКА: Валидация risk_context при stops_precomputed
+        if signal.get('stops_precomputed', False):
+            if not signal.get('risk_context'):
+                errors.append("Risk context required when stops_precomputed=True")
+                return ValidationResult(False, errors)
+
+            risk_ctx = signal['risk_context']
+            required_risk_fields = ['position_size', 'initial_stop_loss', 'take_profit']
+            for field in required_risk_fields:
+                if field not in risk_ctx:
+                    errors.append(f"Invalid risk_context: missing '{field}'")
+
+            if errors:
+                return ValidationResult(False, errors)
+
+            # Проверка hash (опционально, для аудита)
+            if 'validation_hash' in signal:
+                # TODO: Реализовать compute_risk_hash() если нужна проверка
+                pass
+
         # 1. Обязательные поля
-        required_fields = ['direction', 'entry_price', 'position_size', 'stop_loss', 'take_profit', 'confidence']
+        # ✅ ИЗМЕНЕНО: сделать stop_loss/take_profit опциональными при stops_precomputed=True
+        required_fields = ['direction', 'entry_price', 'confidence']
+
+        # Только если НЕ stops_precomputed, требуем старые поля
+        if not signal.get('stops_precomputed', False):
+            required_fields.extend(['position_size', 'stop_loss', 'take_profit'])
+
         for field in required_fields:
             if field not in signal:
                 errors.append(f"Missing required field: {field}")
-        
+
         if errors:
             return ValidationResult(False, errors)
-        
+
         # 2. Валидация direction
+        # ✅ ИСПРАВЛЕНО: поддержка Direction enum И строк
         direction = signal.get('direction')
-        if direction not in ['BUY', 'SELL']:
+
+        # Поддержка как Direction enum, так и строк (backward compatibility)
+        if isinstance(direction, Direction):
+            direction_str = direction.side  # "BUY", "SELL", "FLAT"
+        elif isinstance(direction, int):
+            direction_str = {1: "BUY", -1: "SELL", 0: "FLAT"}.get(direction)
+        else:
+            direction_str = direction
+
+        if direction_str not in ['BUY', 'SELL']:
             errors.append(f"TradeSignalIQTS direction must be BUY or SELL, got {direction}")
             return ValidationResult(False, errors)
-        
-        # 3. Валидация цен
+
+        # 3. Валидация цен и размера
+        # ✅ ИСПРАВЛЕНО: использовать risk_context если stops_precomputed=True
+        if signal.get('stops_precomputed', False):
+            risk_ctx = signal['risk_context']
+            stop_loss = risk_ctx.get('initial_stop_loss', 0.0)
+            take_profit = risk_ctx.get('take_profit', 0.0)
+            position_size = risk_ctx.get('position_size', 0.0)
+        else:
+            stop_loss = signal.get('stop_loss', 0.0)
+            take_profit = signal.get('take_profit', 0.0)
+            position_size = signal.get('position_size', 0.0)
+
         entry_price = signal.get('entry_price', 0.0)
-        stop_loss = signal.get('stop_loss', 0.0)
-        take_profit = signal.get('take_profit', 0.0)
-        position_size = signal.get('position_size', 0.0)
-        
+
+        # ✅ ДОБАВЛЕНО: Проверка положительности
         if entry_price <= 0:
             errors.append(f"entry_price must be positive, got {entry_price}")
         if stop_loss <= 0:
@@ -155,12 +201,13 @@ class SignalValidator:
             errors.append(f"take_profit must be positive, got {take_profit}")
         if position_size <= 0:
             errors.append(f"position_size must be positive, got {position_size}")
-        
+
         if errors:
             return ValidationResult(False, errors)
-        
+
         # 4. Валидация согласованности стопов с направлением
-        if direction == 'BUY':
+        # ✅ ИСПРАВЛЕНО: Используем direction_str вместо direction
+        if direction_str == 'BUY':
             if stop_loss >= entry_price:
                 errors.append(f"BUY: stop_loss ({stop_loss}) must be < entry_price ({entry_price})")
             if take_profit <= entry_price:
@@ -170,32 +217,32 @@ class SignalValidator:
                 errors.append(f"SELL: stop_loss ({stop_loss}) must be > entry_price ({entry_price})")
             if take_profit >= entry_price:
                 errors.append(f"SELL: take_profit ({take_profit}) must be < entry_price ({entry_price})")
-        
+
         if errors:
             return ValidationResult(False, errors)
-        
+
         # 5. Risk/Reward соотношение
         risk = abs(entry_price - stop_loss)
         reward = abs(take_profit - entry_price)
         rr_ratio = reward / risk if risk > 0 else 0
-        
+
         if rr_ratio < 1.0:
             warnings.append(f"Poor risk/reward ratio: {rr_ratio:.2f} (< 1.0)")
         elif rr_ratio < 1.5:
             warnings.append(f"Low risk/reward ratio: {rr_ratio:.2f} (< 1.5)")
-        
+
         # 6. Confidence проверка
         confidence = signal.get('confidence', 0.0)
         if confidence < 0.5:
             warnings.append(f"Low confidence: {confidence:.2f}")
-        
+
         # 7. Размер позиции (предупреждения)
         if position_size * entry_price < 5.0:
             warnings.append(f"Position value {position_size * entry_price:.2f} USDT is very small (< 5 USDT)")
-        
+
         valid = len(errors) == 0 and (not self.strict_mode or len(warnings) == 0)
         return ValidationResult(valid, errors, warnings)
-    
+
     # === TradeSignal валидация (для PositionManager) ===
     
     def validate_trade_signal(self, signal: StrategySignal) -> ValidationResult:
