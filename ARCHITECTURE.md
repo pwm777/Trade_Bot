@@ -334,15 +334,20 @@ Alert условия:
 
 ## 14. Anti-Patterns / Forbidden Practices
 
-| Запрещено | Используй вместо |
-|-----------|------------------|
-| `if direction == 1:` | `if direction == Direction.BUY:` |
-| Пересчитывать SL внутри PositionManager | Использовать risk_context['initial_stop_loss'] |
-| Модифицировать risk_context downstream | Генерировать новый через RiskManager |
-| Сравнивать raw строки `"BUY"/"SELL"` | `direction_to_side(direction)` |
-| Создавать RiskManager внутри стратегии | DI из BotLifecycleManager |
-| Пропускать валидацию сигналов | Использовать SignalValidator |
-| Смешивать бизнес-валидатор и биржевую валидацию | Разделять: Validator vs Exchange constraints |
+| Запрещено | Используй вместо | Причина |
+|-----------|------------------|---------|
+| `if direction == 1:` | `if direction == Direction.BUY:` | Type safety, читаемость |
+| Пересчитывать SL внутри PositionManager | Использовать risk_context['initial_stop_loss'] | Единый источник истины |
+| Модифицировать risk_context downstream | Генерировать новый через RiskManager | Предотвращение tampering |
+| Сравнивать raw строки `"BUY"/"SELL"` | `direction_to_side(direction)` | Type safety, унификация |
+| Создавать RiskManager внутри стратегии | DI из BotLifecycleManager | Testability, configurability |
+| Пропускать валидацию сигналов | Использовать SignalValidator | Security, data integrity |
+| Смешивать бизнес-валидатор и биржевую валидацию | Разделять: Validator vs Exchange constraints | Separation of concerns |
+| `compute_order_size()` напрямую | `risk_context['position_size']` | Deprecated в v3.0 |
+| `compute_entry_stop()` напрямую | `risk_manager.calculate_initial_stop()` | Deprecated в v3.0 |
+| `compute_trailing_level()` напрямую | `exit_manager.calculate_trailing_stop()` | Deprecated в v3.0 |
+| Создавать сигналы вручную | `create_trade_signal()` factory | Гарантирует validation_hash |
+| Игнорировать validation_hash | Проверять через `_verify_risk_context()` | Предотвращение tampering |
 
 ---
 
@@ -363,33 +368,176 @@ Alert условия:
 
 ## 16. Roadmap (v2.x → v3.0)
 
-| Этап | Задача | Статус |
-|------|--------|--------|
-| 1 | Полная миграция deprecated методов | In progress |
-| 2 | Фабрика create_trade_signal() | Planned |
-| 3 | Tamper check (validation_hash) | Planned |
-| 4 | ExitDecision расширение (new_stop_loss / trailing типы) | In progress |
-| 5 | Вынос PnLTracker из RiskManager | Planned |
-| 6 | Тесты (unit + integration) | Planned |
-| 7 | Lint правило на direction enum | Planned |
-| 8 | Документация API ExitDecision | Planned |
+| Этап | Задача | Статус | Дата |
+|------|--------|--------|------|
+| 1 | Полная миграция deprecated методов | ✅ Done | 2025-11-19 |
+| 2 | Фабрика create_trade_signal() | ✅ Done | 2025-11-19 |
+| 3 | Tamper check (validation_hash) | ✅ Done | 2025-11-19 |
+| 4 | ExitDecision расширение (new_stop_loss / trailing типы) | ✅ Done | 2025-11-19 |
+| 5 | Dependency Injection SignalValidator | ✅ Done | 2025-11-19 |
+| 6 | build_entry_order() priority fix | ✅ Done | 2025-11-19 |
+| 7 | Вынос PnLTracker из RiskManager | Planned | - |
+| 8 | Тесты (unit + integration) | Planned | - |
+| 9 | Lint правило на direction enum | Planned | - |
+| 10 | Документация API ExitDecision | In Progress | - |
 
 ---
 
 ## 17. Checklist для Pull Requests
 
-Перед мержем:
-- [ ] Нет прямых сравнений direction == 1 / -1
+### Code Quality
+- [ ] Нет прямых сравнений direction == 1 / -1 (используй Direction enum)
+- [ ] Все deprecated методы имеют warnings.warn() с stacklevel=2
+- [ ] Type annotations добавлены для всех публичных методов
+- [ ] Docstrings обновлены для изменённых методов
+
+### Signal & Risk Management
 - [ ] Все новые сигналы содержат risk_context при stops_precomputed=True
-- [ ] validation_hash генерируется и логируется
-- [ ] Slippage > 0.1% вызывает alert
-- [ ] Deprecated методы не используются вне fallback путей
+- [ ] validation_hash генерируется через create_trade_signal()
+- [ ] validation_hash проверяется в PositionManager.handle_signal()
+- [ ] Используй risk_context['position_size'] вместо compute_order_size()
+
+### Exit Management
 - [ ] ExitDecision имеет стандартизированные поля (reason, urgency, type)
+- [ ] ExitDecision содержит new_stop_loss, trailing_type, stop_distance_pct
+- [ ] calculate_trailing_stop() возвращает все новые поля
+
+### Dependency Injection
 - [ ] Компоненты создаются через DI (нет inline new RiskManager())
+- [ ] SignalValidator передаётся в PositionManager через __init__()
+- [ ] ExitManager передаётся через DI, не создаётся внутри
+
+### Security & Monitoring
+- [ ] Slippage > 0.1% вызывает alert
+- [ ] CRITICAL errors логируются при tampering detection
+- [ ] Deprecated методы не используются вне fallback путей
+
+### Backward Compatibility
+- [ ] Старый код работает с warnings (не ломается)
+- [ ] Проверки на None для optional полей
+- [ ] Fallback логика для отсутствующих полей
 
 ---
 
-## 18. Appendix: Инвентаризация (ранее structure_bot.txt)
+## 18. API Usage Examples
+
+### 18.1 Creating Trade Signals (Правильно)
+
+```python
+from iqts_standards import create_trade_signal, Direction
+
+# ✅ Правильно: Используем фабрику с auto-validation
+signal = create_trade_signal(
+    symbol="ETHUSDT",
+    direction=Direction.BUY,  # Enum вместо 1
+    entry_price=3250.0,
+    confidence=0.85,
+    risk_context={
+        "position_size": 0.5,
+        "initial_stop_loss": 3200.0,
+        "take_profit": 3350.0,
+        "atr": 25.0
+    },
+    regime="strong_uptrend"
+)
+
+# Автоматически добавлено:
+# - correlation_id
+# - validation_hash
+# - stops_precomputed=True
+# - generated_at_ms
+```
+
+### 18.2 Dependency Injection Setup
+
+```python
+# run_bot.py example
+from signal_validator import SignalValidator
+from position_manager import PositionManager
+from exit_system import AdaptiveExitManager
+
+# 1. Создаём зависимости
+validator = SignalValidator(strict_mode=True, logger=logger)
+exit_manager = AdaptiveExitManager(global_timeframe="5m", trend_timeframe="1m")
+risk_manager = EnhancedRiskManager(limits=risk_limits)
+
+# 2. Внедряем через конструктор
+position_manager = PositionManager(
+    symbols_meta=symbols_meta,
+    db_dsn=db_dsn,
+    trade_log=trade_log,
+    signal_validator=validator  # ✅ DI
+)
+
+# 3. Опциональные зависимости через сеттеры
+if not position_manager.risk_manager:
+    position_manager.risk_manager = risk_manager
+    
+if not position_manager.exit_manager:
+    position_manager.exit_manager = exit_manager
+```
+
+### 18.3 Risk Context Verification
+
+```python
+# PositionManager автоматически проверяет tampering
+def handle_signal(self, signal):
+    # ✅ Автоматическая проверка validation_hash
+    if not self._verify_risk_context(signal):
+        # CRITICAL log + reject
+        return None
+    
+    # Продолжаем обработку...
+```
+
+### 18.4 Trailing Stop Calculation
+
+```python
+# exit_system.py - новый DI метод
+result = exit_manager.calculate_trailing_stop(
+    current_price=3275.0,
+    entry_price=3250.0,
+    side="LONG",
+    max_pnl_percent=1.5,
+    current_stop_price=3240.0,
+    symbol="ETHUSDT"
+)
+
+# Результат содержит новые поля для ExitDecision:
+# {
+#   'new_stop': 3250.0,
+#   'beneficial': True,
+#   'new_stop_loss': 3250.0,  # ✅ Новое
+#   'new_take_profit': None,   # ✅ Новое
+#   'trailing_type': 'adaptive_trailing',  # ✅ Новое
+#   'stop_distance_pct': 0.0   # ✅ Новое
+# }
+```
+
+### 18.5 Deprecated Method Migration
+
+```python
+# ❌ Старый код (будет deprecated в v3.0)
+qty = position_manager.compute_order_size(symbol, risk_ctx)
+stop = position_manager.compute_entry_stop(price, side, stop_loss_pct=0.5)
+
+# ✅ Новый код (используй risk_context)
+signal = create_trade_signal(
+    symbol=symbol,
+    direction=Direction.BUY,
+    entry_price=price,
+    confidence=0.8,
+    risk_context={
+        "position_size": qty,  # От RiskManager
+        "initial_stop_loss": stop,  # От RiskManager
+        "take_profit": tp
+    }
+)
+```
+
+---
+
+## 19. Appendix: Инвентаризация (ранее structure_bot.txt)
 
 Ниже полная структура модулей и классов (скопировано и адаптировано из `structure_bot.txt`).  
 Этот раздел — справочный. Не редактируется часто, актуализируется по мере расширений.
@@ -428,7 +576,65 @@ Alert условия:
 
 ---
 
-## 19. Deprecation Map
+## 20. Migration Guide (v2.x → v3.0)
+
+### Deprecated Methods (Remove in v3.0)
+
+| Deprecated Method | Replacement | Migration Path |
+|-------------------|-------------|----------------|
+| `compute_order_size()` | `risk_context['position_size']` | Use EnhancedRiskManager to calculate |
+| `compute_entry_stop()` | `risk_manager.calculate_initial_stop()` | DI RiskManager in component |
+| `compute_trailing_level()` | `exit_manager.calculate_trailing_stop()` | DI ExitManager in component |
+
+### Migration Steps
+
+#### Step 1: Update Signal Creation
+```python
+# Old (manual creation)
+signal = {
+    "symbol": "ETHUSDT",
+    "direction": 1,  # ❌ Magic number
+    "entry_price": 3250.0
+}
+
+# New (factory with validation)
+signal = create_trade_signal(
+    symbol="ETHUSDT",
+    direction=Direction.BUY,  # ✅ Type-safe enum
+    entry_price=3250.0,
+    confidence=0.85,
+    risk_context=risk_ctx  # ✅ Pre-calculated
+)
+```
+
+#### Step 2: Enable Dependency Injection
+```python
+# Add to component initialization
+position_manager = PositionManager(
+    ...,
+    signal_validator=validator  # ✅ DI
+)
+```
+
+#### Step 3: Update Exit Logic
+```python
+# Old
+new_stop = pm.compute_trailing_level(price, side, current_stop, **kwargs)
+
+# New
+result = exit_manager.calculate_trailing_stop(
+    current_price=price,
+    entry_price=entry,
+    side=side,
+    max_pnl_percent=max_pnl,
+    current_stop_price=current_stop
+)
+new_stop = result['new_stop_loss']  # ✅ Structured result
+```
+
+---
+
+## 21. Deprecation Map
 
 | Метод / Файл | Статус | Заменяется |
 |--------------|--------|-----------|
@@ -440,7 +646,7 @@ Alert условия:
 
 ---
 
-## 20. FAQ
+## 22. FAQ
 
 | Вопрос | Ответ |
 |--------|-------|
@@ -452,10 +658,17 @@ Alert условия:
 
 ---
 
-## 21. Changelog (Архитектурный)
+## 23. Changelog (Архитектурный)
 
 | Дата | Изменение | Автор |
 |------|-----------|-------|
+| 2025-11-19 | ✅ Реализован create_trade_signal() factory с auto-validation | pwm777 |
+| 2025-11-19 | ✅ Добавлена проверка validation_hash для risk_context | pwm777 |
+| 2025-11-19 | ✅ Внедрён SignalValidator через DI в PositionManager | pwm777 |
+| 2025-11-19 | ✅ Расширен ExitDecision TypedDict (new_stop_loss, trailing_type) | pwm777 |
+| 2025-11-19 | ✅ Добавлены DeprecationWarnings для 3 методов | pwm777 |
+| 2025-11-19 | ✅ Исправлен build_entry_order() priority (risk_context first) | pwm777 |
+| 2025-11-19 | 📝 Обновлена документация: Roadmap, Checklist, Examples, Migration | pwm777 |
 | 2025-11-18 | Консолидация risk-менеджмента, DI внедрён | pwm777 |
 | 2025-11-18 | Добавлен calculate_initial_stop() | pwm777 |
 | 2025-11-18 | Добавлен calculate_trailing_stop() | pwm777 |
@@ -463,7 +676,7 @@ Alert условия:
 
 ---
 
-## 22. License / Ownership
+## 24. License / Ownership
 Архитектурный документ принадлежит проекту Trade Bot.  
 Изменения требуют ревью минимум одного разработчика, ответственного за слой (Strategy / Risk / Execution).
 
