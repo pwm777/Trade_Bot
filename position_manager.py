@@ -20,7 +20,7 @@ from iqts_standards import (
     ExchangeManagerInterface
 )
 from risk_manager import Direction
-
+from exit_system import AdaptiveExitManager
 logger = logging.getLogger(__name__)
 from config import STRATEGY_PARAMS
 
@@ -110,10 +110,11 @@ class PositionManager:
                  price_feed: Optional[PriceFeed] = None,
                  execution_mode: Literal["LIVE", "DEMO", "BACKTEST"] = "DEMO",
                  db_engine: Optional[Engine] = None,
-                 signal_validator: Optional[Any] = None):
+                 signal_validator: Optional[Any] = None,
+                 exit_manager: Optional[AdaptiveExitManager] = None):
 
         self.exchange_manager: Optional[ExchangeManagerInterface] = None
-        
+        self.exit_manager: Optional[AdaptiveExitManager] = None
         # Dependency Injection: SignalValidator
         self.signal_validator = signal_validator
 
@@ -351,7 +352,11 @@ class PositionManager:
         return self.build_exit_order(signal, current_position, "SIGNAL_EXIT")
 
     def _handle_wait_signal(self, signal: TradeSignal, current_position: PositionSnapshot) -> Optional[OrderReq]:
-        """Обработка WAIT сигнала с вычислением trailing stop."""
+        """
+        Обработка WAIT сигнала с вычислением trailing stop.
+
+        ✅ UPDATED: Uses AdaptiveExitManager.calculate_trailing_stop() (v2.1+)
+        """
         try:
             symbol = signal["symbol"]
 
@@ -367,23 +372,78 @@ class PositionManager:
             if not trailing_request:
                 return None
 
-            current_stop = self._get_current_stop_price(symbol)
+            # === ✅ ИСПРАВЛЕНО: Используем AdaptiveExitManager.calculate_trailing_stop ===
 
-            new_stop_price_float = self.compute_trailing_level(
-                current_price=float(signal["decision_price"]),
-                side=position_side,
-                current_stop_price=current_stop,
-                symbol=symbol,
-                max_pnl_percent=trailing_request.get("max_pnl_percent"),
-                entry_price=trailing_request.get("entry_price")
-            )
+            # Проверяем наличие exit_manager
+            if not hasattr(self, 'exit_manager') or not self.exit_manager:
+                self.logger.warning(
+                    f"⚠️ exit_manager not set for PositionManager! "
+                    f"Cannot calculate trailing stop for {symbol}. "
+                    f"Falling back to deprecated compute_trailing_level()."
+                )
+                # Fallback на старый метод (выдаст DeprecationWarning)
+                current_stop = self._get_current_stop_price(symbol)
+                new_stop_price_float = self.compute_trailing_level(
+                    current_price=float(signal["decision_price"]),
+                    side=position_side,
+                    current_stop_price=current_stop,
+                    symbol=symbol,
+                    max_pnl_percent=trailing_request.get("max_pnl_percent"),
+                    entry_price=trailing_request.get("entry_price")
+                )
+            else:
+                # ✅ НОВЫЙ ПУТЬ: Используем AdaptiveExitManager.calculate_trailing_stop()
+                current_price = float(signal["decision_price"])
+                entry_price = trailing_request.get("entry_price")
+                max_pnl_percent = trailing_request.get("max_pnl_percent")
+                current_stop = self._get_current_stop_price(symbol)
 
+                self.logger.debug(
+                    f"Calculating trailing stop via AdaptiveExitManager for {symbol}:\n"
+                    f"  current_price: {current_price}\n"
+                    f"  entry_price: {entry_price}\n"
+                    f"  max_pnl_percent: {max_pnl_percent}\n"
+                    f"  current_stop: {current_stop}\n"
+                    f"  side: {position_side}"
+                )
+
+                # Вызываем метод exit_manager
+                result = self.exit_manager.calculate_trailing_stop(
+                    current_price=current_price,
+                    entry_price=entry_price,
+                    side=position_side,  # "LONG" или "SHORT"
+                    max_pnl_percent=max_pnl_percent,
+                    current_stop_price=current_stop,
+                    symbol=symbol
+                )
+
+                # Извлекаем новый стоп из результата
+                new_stop_price_float = result.get('new_stop')
+
+                # Логируем детали результата
+                if result.get('beneficial'):
+                    self.logger.info(
+                        f"✅ Trailing stop calculated for {symbol}:\n"
+                        f"  new_stop_loss: {result.get('new_stop_loss')}\n"
+                        f"  trailing_type: {result.get('trailing_type')}\n"
+                        f"  stop_distance_pct: {result.get('stop_distance_pct')}\n"
+                        f"  reason: {result.get('reason')}"
+                    )
+                else:
+                    self.logger.debug(
+                        f"Trailing stop not beneficial for {symbol}: {result.get('reason')}"
+                    )
+
+            # === Проверка результата ===
             if not new_stop_price_float:
+                self.logger.debug(f"No new trailing stop calculated for {symbol}")
                 return None
 
+            # === Квантуем цену ===
             new_stop_price = self.quantize_price(symbol, Decimal(str(new_stop_price_float)))
 
-            # ✅ ИСПРАВЛЕНО: НЕ отменяем старый стоп
+            # === Строим ордер ===
+            # НЕ отменяем старый стоп
             # ExchangeManager обновит его через update_stop_order()
 
             return self.build_stop_order(
@@ -394,46 +454,36 @@ class PositionManager:
             )
 
         except Exception as e:
-            self.logger.error(f"Error handling WAIT signal: {e}")
+            self.logger.error(f"Error handling WAIT signal: {e}", exc_info=True)
             return None
 
-    def create_initial_stop(self, symbol: str, *, stop_loss_pct: Optional[float] = None) -> Optional[OrderReq]:
+    async def create_initial_stop(
+            self,
+            symbol: str,
+            *,
+            stop_loss_pct: Optional[float] = None
+    ) -> Optional[OrderReq]:
         """
         Создать и ОТПРАВИТЬ начальный стоп-лосс ордер для открытой позиции.
 
-        ИЗМЕНЕНИЯ:
-        - Убрана ветка else (BACKTEST без EM) - стоп ВСЕГДА отправляется через EM
-        - Добавлена валидация наличия ExchangeManager
-        - Упрощена логика - один путь исполнения для всех режимов
-        - Добавлено детальное логирование для диагностики
-
         Args:
             symbol: Торговый символ
-            stop_loss_pct: Процент стоп-лосса (если None - загружается из конфига)
+            stop_loss_pct: Процент стоп-лосса
 
         Returns:
-            OrderReq если стоп успешно создан и отправлен, иначе None
+            OrderReq если стоп успешно создан, иначе None
         """
         try:
             self.logger.info(f"🟢 create_initial_stop CALLED: symbol={symbol} stop_loss_pct={stop_loss_pct}")
 
-            # === ШАГ 1: КРИТИЧЕСКАЯ ПРОВЕРКА ExchangeManager ===
+            # === ШАГ 1: Проверка ExchangeManager ===
             if not self.exchange_manager:
-                self.logger.error(
-                    f"❌ CRITICAL ERROR: ExchangeManager not set for PositionManager! "
-                    f"Cannot create stop for {symbol}. "
-                    f"Make sure set_exchange_manager() was called during initialization."
-                )
+                self.logger.error("❌ CRITICAL: ExchangeManager not set!")
                 return None
 
-            # === ШАГ 2: Получаем текущую позицию ===
+            # === ШАГ 2: Получаем позицию ===
             position = self.get_position(symbol)
-            self.logger.debug(
-                f"  Position: status={position['status']} side={position.get('side')} "
-                f"entry={position.get('avg_entry_price')}"
-            )
 
-            # === ШАГ 3: Валидация позиции ===
             if position["status"] != "OPEN":
                 self.logger.warning(f"Cannot create stop: position not OPEN for {symbol}")
                 return None
@@ -442,20 +492,20 @@ class PositionManager:
             entry_price = position.get("avg_entry_price")
 
             if not entry_price:
-                self.logger.error(f"No entry price for {symbol}, cannot calculate stop")
+                self.logger.error(f"No entry price for {symbol}")
                 return None
 
-            # === ШАГ 4: Определяем stop_loss_pct ===
+            # === ШАГ 3: Определяем stop_loss_pct ===
             if stop_loss_pct is None:
                 try:
                     strategy_config = STRATEGY_PARAMS.get("CornEMA", {})
                     stop_loss_pct = float(strategy_config.get("entry_stoploss_pct", 0.30))
                     self.logger.info(f"Using entry_stoploss_pct from config: {stop_loss_pct}%")
                 except Exception as e:
-                    self.logger.error(f"Error loading stop_loss_pct from config: {e}")
-                    stop_loss_pct = 0.30  # безопасный fallback
+                    self.logger.error(f"Error loading stop_loss_pct: {e}")
+                    stop_loss_pct = 0.30
 
-            # === ШАГ 5: Рассчитываем цену стопа (только Decimal) ===
+            # === ШАГ 4: Рассчитываем цену стопа ===
             try:
                 entry_price_dec = Decimal(str(entry_price))
                 pct_factor = Decimal(str(stop_loss_pct)) / Decimal('100')
@@ -470,49 +520,22 @@ class PositionManager:
 
                 stop_price_decimal = entry_price_dec * multiplier
             except ValueError as e:
-                self.logger.error(f"Decimal conversion failed for {symbol}: {e}")
+                self.logger.error(f"Decimal conversion failed: {e}")
                 return None
 
-            # === ШАГ 6: Квантуем цену ===
+            # === ШАГ 5: Квантуем цену ===
             stop_price_decimal = self.quantize_price(symbol, stop_price_decimal)
             self.logger.info(
-                f"Calculated stop price for {symbol}: {float(stop_price_decimal):.8f} "
+                f"Calculated stop price: {float(stop_price_decimal):.8f} "
                 f"(entry={float(entry_price):.8f}, loss={stop_loss_pct}%)"
             )
 
-            # === ШАГ 7: Генерируем уникальный ID ===
+            # === ШАГ 6: Генерируем ID ===
             client_order_id = self._generate_unique_order_id(symbol, "auto_stop")
-
-            # === ШАГ 8: Отменяем существующие стопы (если есть) ===
-            try:
-                active_orders = self.exchange_manager.get_active_orders(symbol)
-                for order in active_orders:
-                    if (order["type"] in ["STOP", "STOP_MARKET"] and
-                            order.get("correlation_id") and
-                            "auto_stop_" in order.get("correlation_id")):
-
-                        self.logger.info(
-                            f"Canceling existing auto-stop before creating new one: "
-                            f"{order['client_order_id']}"
-                        )
-
-                        ack = self.exchange_manager.cancel_order(
-                            client_order_id=order["client_order_id"]
-                        )
-
-                        if ack.get("status") == "CANCELED":
-                            self.logger.info(f"✅ Canceled existing auto-stop: {order['client_order_id']}")
-                        else:
-                            self.logger.warning(f"⚠️ Failed to cancel existing auto-stop: {ack}")
-            except Exception as cancel_error:
-                self.logger.warning(f"Error canceling existing stops: {cancel_error}")
-
-            # === ШАГ 9: Определяем сторону стоп-ордера ===
             stop_side: Literal["BUY", "SELL"] = "SELL" if position_side == "LONG" else "BUY"
-
-            # === ШАГ 10: Формируем OrderReq ===
             correlation_id = f"initial_stop_{symbol}_{get_current_timestamp_ms()}"
 
+            # === ШАГ 7: Формируем OrderReq ===
             order_req = OrderReq(
                 client_order_id=client_order_id,
                 symbol=symbol,
@@ -532,30 +555,18 @@ class PositionManager:
                 }
             )
 
-            # === ШАГ 11: КРИТИЧНО - ОТПРАВЛЯЕМ через ExchangeManager ===
-            self.logger.warning(
-                f"🔍 DEBUG: Sending initial stop to ExchangeManager:\n"
-                f"  symbol: {symbol}\n"
-                f"  client_order_id: {client_order_id}\n"
-                f"  stop_price: {float(stop_price_decimal):.8f}\n"
-                f"  side: {stop_side}\n"
-                f"  reduce_only: True"
-            )
+            # === ШАГ 8: ✅ ИСПРАВЛЕНО - Отправляем с await ===
+            self.logger.warning(f"🔍 Sending initial stop to ExchangeManager...")
 
-            ack = self.exchange_manager.place_order(order_req)
+            ack = await self.exchange_manager.place_order(order_req)  # ✅ await!
 
-            self.logger.warning(
-                f"🔍 DEBUG: ExchangeManager response:\n"
-                f"  status: {ack.get('status')}\n"
-                f"  full_ack: {ack}"
-            )
+            self.logger.warning(f"🔍 ExchangeManager response: {ack}")
 
-            # === ШАГ 12: Проверяем результат отправки ===
-            ack_status = ack.get("status")
+            # === ШАГ 9: Проверяем результат ===
+            ack_status = ack.get("status")  # ✅ Теперь работает!
 
-            # ✅ ИСПРАВЛЕНО: Добавлен "FILLED" для BACKTEST режима
             if ack_status in ["NEW", "WORKING", "FILLED"]:
-                # ✅ Только после успешной отправки регистрируем
+                # Регистрируем ордер
                 pending_order = PendingOrder(
                     client_order_id=client_order_id,
                     symbol=symbol,
@@ -576,7 +587,6 @@ class PositionManager:
 
                 self._pending_orders[client_order_id] = pending_order
 
-                # === ШАГ 13: Обновляем отслеживание ===
                 self._update_active_stop_tracking(symbol, {
                     "client_order_id": client_order_id,
                     "stop_price": float(stop_price_decimal),
@@ -587,47 +597,39 @@ class PositionManager:
                     "reason": "initial_stop"
                 })
 
-                # === ШАГ 14: Инициализируем timestamp для trailing ===
                 state = self._get_or_create_state(symbol)
                 state["last_trailing_update_ts"] = get_current_timestamp_ms()
 
                 self.logger.warning(
-                    f"=" * 80 + "\n"
-                                f"✅ INITIAL STOP CREATED AND SENT SUCCESSFULLY\n"
-                                f"  Symbol: {symbol}\n"
-                                f"  Position: {position_side} @ {float(entry_price):.8f}\n"
-                                f"  Stop Price: {float(stop_price_decimal):.8f}\n"
-                                f"  Distance: {stop_loss_pct}%\n"
-                                f"  Client Order ID: {client_order_id}\n"
-                                f"  Exchange Status: {ack_status}\n"
-                                f"  Execution Mode: {self.execution_mode}\n"
-                                f"=" * 80
+                    f"{'=' * 80}\n"
+                    f"✅ INITIAL STOP CREATED SUCCESSFULLY\n"
+                    f"  Symbol: {symbol}\n"
+                    f"  Position: {position_side} @ {float(entry_price):.8f}\n"
+                    f"  Stop Price: {float(stop_price_decimal):.8f}\n"
+                    f"  Distance: {stop_loss_pct}%\n"
+                    f"  Client Order ID: {client_order_id}\n"
+                    f"  Status: {ack_status}\n"
+                    f"{'=' * 80}"
                 )
 
                 return order_req
 
             else:
-                # ❌ Отказ от биржи
+                # Ордер отклонён
                 error_msg = ack.get("error_message") or ack.get("error") or "Unknown error"
 
                 self.logger.error(
-                    f"❌ INITIAL STOP REJECTED BY EXCHANGE:\n"
+                    f"❌ INITIAL STOP REJECTED:\n"
                     f"  Symbol: {symbol}\n"
                     f"  Status: {ack_status}\n"
-                    f"  Error: {error_msg}\n"
-                    f"  Full Response: {ack}"
+                    f"  Error: {error_msg}"
                 )
 
-                # Удаляем из отслеживания при отказе
                 self._remove_active_stop_tracking(symbol)
-
                 return None
 
         except Exception as e:
-            self.logger.error(
-                f"❌ EXCEPTION in create_initial_stop for {symbol}: {e}",
-                exc_info=True
-            )
+            self.logger.error(f"❌ EXCEPTION in create_initial_stop: {e}", exc_info=True)
             return None
 
     def on_stop_triggered(self, symbol: str, execution_price: float) -> None:
@@ -704,10 +706,9 @@ class PositionManager:
     def _cancel_stops_for_symbol(self, symbol: str) -> None:
         """
         Отменить все активные стоп-ордера для символа при закрытии позиции.
-        Предотвращает накопление "мусорных" стопов.
         """
         try:
-            # 1. Удаляем из внутреннего отслеживания PM
+            # 1. Удаляем из внутреннего отслеживания
             if symbol in self._active_stop_orders:
                 stop_info = self._active_stop_orders.pop(symbol)
                 self.logger.debug(
@@ -715,12 +716,12 @@ class PositionManager:
                     f"stop_price={stop_info.get('stop_price')}"
                 )
 
-            # 2. Проверяем наличие ExchangeManager
+            # 2. Проверяем ExchangeManager
             if not self.exchange_manager:
-                self.logger.warning(f"ExchangeManager not available to cancel stops for {symbol}")
+                self.logger.warning(f"ExchangeManager not available")
                 return
 
-            # 3. Проверяем наличие нужных методов (runtime проверка)
+            # 3. Проверяем методы
             if not hasattr(self.exchange_manager, 'get_active_orders'):
                 self.logger.warning(f"ExchangeManager doesn't support get_active_orders")
                 return
@@ -729,13 +730,14 @@ class PositionManager:
                 self.logger.warning(f"ExchangeManager doesn't support cancel_order")
                 return
 
-            # 4. Получаем все активные ордера для символа
+            # 4. ✅ Получаем активные ордера (СИНХРОННО)
             active_orders = self.exchange_manager.get_active_orders(symbol)
+
             if not active_orders:
                 self.logger.debug(f"No active orders found for {symbol}")
                 return
 
-            # 5. Отменяем все STOP ордера
+            # 5. Отменяем STOP ордера
             canceled_count = 0
             for order in active_orders:
                 order_type = order.get("type")
@@ -745,31 +747,32 @@ class PositionManager:
                         continue
 
                     self.logger.debug(
-                        f"Canceling stop order {client_order_id} for closed position {symbol} "
-                        f"(type={order_type}, stop_price={order.get('stop_price')})"
+                        f"Canceling stop order {client_order_id} for closed position {symbol}"
                     )
 
                     try:
-                        # ✅ Используем вызов с игнорированием типов
-                        result = self.exchange_manager.cancel_order(client_order_id)  # type: ignore[attr-defined]
+                        # ✅ Отменяем (СИНХРОННО)
+                        result = self.exchange_manager.cancel_order(client_order_id)
 
+                        # ✅ result это Dict[str, Any], можно использовать .get()
                         if result.get("status") == "CANCELED":
                             canceled_count += 1
+                            self.logger.debug(f"✅ Canceled {client_order_id}")
                         else:
                             self.logger.warning(
-                                f"Failed to cancel stop {client_order_id}: "
+                                f"Failed to cancel {client_order_id}: "
                                 f"{result.get('error_message', 'Unknown error')}"
                             )
                     except Exception as cancel_error:
-                        self.logger.error(f"Error canceling stop {client_order_id}: {cancel_error}")
+                        self.logger.error(f"Error canceling {client_order_id}: {cancel_error}")
 
             if canceled_count > 0:
                 self.logger.info(
-                    f"Canceled {canceled_count} stop order(s) for {symbol} on position close"
+                    f"✅ Canceled {canceled_count} stop order(s) for {symbol}"
                 )
 
         except Exception as e:
-            self.logger.error(f"Error in _cancel_stops_for_symbol for {symbol}: {e}")
+            self.logger.error(f"❌ Error in _cancel_stops_for_symbol: {e}", exc_info=True)
 
     def _validate_stop_update(self, stop_update: Dict[str, Any],
                               position: PositionSnapshot,

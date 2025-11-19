@@ -40,8 +40,14 @@ from market_aggregator import MarketAggregatorFactory
 from ImprovedQualityTrendSystem import ImprovedQualityTrendSystem
 from signal_validator import SignalValidator
 from trading_logger import TradingLogger
+from exit_system import AdaptiveExitManager
 import config as cfg
 import os
+
+signal_validator = SignalValidator(strict_mode=False)
+exit_manager = AdaptiveExitManager(
+    global_timeframe="5m",
+    trend_timeframe="1m")
 
 # === Components Container ===
 @dataclass

@@ -197,28 +197,28 @@ def _compute_risk_hash_light(risk_context: Dict[str, Any]) -> str:
     return hashlib.sha256(canonical.encode()).hexdigest()[:16]
 
 def create_trade_signal(
-    *,
-    symbol: str,
-    direction: Direction,
-    entry_price: float,
-    confidence: float,
-    risk_context: Optional[Dict[str, Any]] = None,
-    metadata: Optional[Dict[str, Any]] = None,
-    regime: Optional[str] = None,
-    correlation_id: Optional[str] = None
+        *,
+        symbol: str,
+        direction: Union[Direction, int, str],
+        entry_price: float,
+        confidence: float,
+        risk_context: Optional[Dict[str, Any]] = None,
+        metadata: Optional[Dict[str, Any]] = None,
+        regime: Optional[str] = None,
+        correlation_id: Optional[str] = None
 ) -> Dict[str, Any]:
     """
     Factory: формирует единый TradeSignalIQTS
-    
+
     Гарантии:
       - direction → Direction (enum) - автоматическая нормализация
       - correlation_id генерируется автоматически если не передан
       - stops_precomputed=True если есть risk_context
       - validation_hash добавляется автоматически для risk_context
-      - entry_price/position_size > 0 проверяются
-    
+      - entry_price > 0 проверяется
+
     Args:
-        symbol: Торговый символ (обязательно)
+        symbol: Торговый символ (обязательно, например "ETHUSDT")
         direction: Направление сделки (автоматически нормализуется в Direction enum)
         entry_price: Цена входа (должна быть > 0)
         confidence: Уверенность в сигнале (0.0 - 1.0)
@@ -226,55 +226,108 @@ def create_trade_signal(
         metadata: Дополнительные метаданные (опционально)
         regime: Режим рынка (опционально)
         correlation_id: ID корреляции (генерируется автоматически если None)
-    
+
     Returns:
         TradeSignalIQTS словарь с полными данными
-        
+
     Raises:
         ValueError: Если entry_price <= 0 или invalid risk_context
+
+    Examples:
+        #>>> from iqts_standards import create_trade_signal, Direction
+        #>>>
+        #>>> # С risk_context (v2.0 стиль)
+        #>>> signal = create_trade_signal(
+        #...     symbol="ETHUSDT",
+        #...     direction=Direction.BUY,
+        #...     entry_price=3250.0,
+        #...     confidence=0.85,
+        #...     risk_context={
+        #...         'position_size': 0.5,
+        #...         'initial_stop_loss': 3200.0,
+        #...         'take_profit': 3350.0,
+        #...         'atr': 25.0
+        #...     }
+        #... )
+        #>>>
+        #>>> # Без risk_context (старый стиль)
+        #>>> signal = create_trade_signal(
+        #...     symbol="BTCUSDT",
+        #...     direction=1,  # Автоматически → Direction.BUY
+        #...     entry_price=50000.0,
+        #...     confidence=0.75
+        #... )
     """
     # Автоматическая нормализация direction
     if not isinstance(direction, Direction):
         # Пытаемся конвертировать числовые значения
-        if str(direction).isdigit() or isinstance(direction, int):
-            direction = Direction(int(direction))
+        if isinstance(direction, int):
+            direction = Direction(direction)
+        elif isinstance(direction, str):
+            direction = {
+                "BUY": Direction.BUY,
+                "SELL": Direction.SELL,
+                "FLAT": Direction.FLAT,
+                "1": Direction.BUY,
+                "-1": Direction.SELL,
+                "0": Direction.FLAT
+            }.get(direction.upper(), Direction.FLAT)
         else:
             direction = Direction.FLAT
 
     # Валидация entry_price
     if entry_price <= 0:
-        raise ValueError(f"Invalid entry_price: {entry_price}")
+        raise ValueError(f"entry_price must be > 0, got {entry_price}")
 
-    # Автоматическая генерация correlation_id если не передан
-    if correlation_id is None:
+    # Валидация confidence
+    if not (0.0 <= confidence <= 1.0):
+        raise ValueError(f"confidence must be in [0, 1], got {confidence}")
+
+    # Генерируем correlation_id если не передан
+    if not correlation_id:
         correlation_id = create_correlation_id()
 
+    # Формируем базовый сигнал
     signal: Dict[str, Any] = {
-        "symbol": symbol,
-        "direction": direction,
-        "entry_price": float(entry_price),
-        "confidence": float(confidence),
-        "regime": regime,
-        "metadata": metadata or {},
-        "generated_at_ms": int(time.time() * 1000),
-        "correlation_id": correlation_id
+        'symbol': symbol,
+        'direction': direction,
+        'entry_price': entry_price,
+        'confidence': confidence,
+        'correlation_id': correlation_id,
     }
 
-    if risk_context:
-        # Валидация обязательных полей risk_context
-        if risk_context.get("position_size", 0) <= 0:
-            raise ValueError("risk_context.position_size must be > 0")
-        if risk_context.get("initial_stop_loss", 0) <= 0:
-            raise ValueError("risk_context.initial_stop_loss must be > 0")
-        if risk_context.get("take_profit", 0) <= 0:
-            raise ValueError("risk_context.take_profit must be > 0")
+    # Добавляем опциональные поля
+    if regime:
+        signal['regime'] = regime
+    if metadata:
+        signal['metadata'] = metadata
 
-        signal["risk_context"] = risk_context
-        signal["stops_precomputed"] = True
-        # Автоматическая генерация validation_hash
-        signal["validation_hash"] = _compute_risk_hash_light(risk_context)
+    # Обрабатываем risk_context
+    if risk_context:
+        # Валидация обязательных полей в risk_context
+        required_fields = ['position_size', 'initial_stop_loss', 'take_profit']
+        missing = [f for f in required_fields if f not in risk_context]
+        if missing:
+            raise ValueError(f"Invalid risk_context: missing fields {missing}")
+
+        # Валидация значений
+        if risk_context.get('position_size', 0) <= 0:
+            raise ValueError(
+                f"Invalid position_size in risk_context: {risk_context.get('position_size')}"
+            )
+
+        signal['risk_context'] = risk_context
+        signal['stops_precomputed'] = True
+
+        # ✅ Генерируем validation_hash
+        signal['validation_hash'] = compute_risk_hash(risk_context)
+
+        # ✅ Backward compatibility: копируем в deprecated поля
+        signal['position_size'] = risk_context.get('position_size')
+        signal['stop_loss'] = risk_context.get('initial_stop_loss')
+        signal['take_profit'] = risk_context.get('take_profit')
     else:
-        signal["stops_precomputed"] = False
+        signal['stops_precomputed'] = False
 
     return signal
 
@@ -326,6 +379,64 @@ def safe_nested_getattr(obj: Any, attr_path: str, default: Any = None) -> Any:
         logger.debug(f"safe_nested_getattr({attr_path}): {type(e).__name__}: {e}")
         return default
 
+
+# iqts_standards.py, в раздел утилит (после всех TypedDict)
+
+def compute_risk_hash(risk_context: Dict[str, Any]) -> str:
+    """
+    Вычисляет SHA256 hash от risk_context для проверки целостности.
+
+    Используется для обнаружения tampering (несанкционированного изменения)
+    риск-параметров после их создания RiskManager'ом.
+
+    Args:
+        risk_context: Словарь с риск-параметрами
+
+    Returns:
+        Hex-строка SHA256 hash (первые 16 символов)
+
+    Example:
+        >>> risk_ctx = {
+        ...     'position_size': 0.5,
+        ...     'initial_stop_loss': 3200.0,
+        ...     'take_profit': 3350.0
+        ... }
+        >>> hash_value = compute_risk_hash(risk_ctx)
+        >>> print(hash_value)  # 'a3f5c8d9e2b1f0a4'
+    """
+    try:
+        # Извлекаем только критичные поля (не включаем metadata)
+        critical_fields = [
+            'position_size',
+            'initial_stop_loss',
+            'take_profit',
+            'atr',
+            'stop_atr_multiplier',
+            'tp_atr_multiplier'
+        ]
+
+        # Собираем значения полей в детерминированном порядке
+        values_to_hash = []
+        for field in critical_fields:
+            value = risk_context.get(field)
+            if value is not None:
+                # Конвертируем в строку с фиксированной точностью
+                if isinstance(value, (float, Decimal)):
+                    values_to_hash.append(f"{field}:{float(value):.8f}")
+                else:
+                    values_to_hash.append(f"{field}:{value}")
+
+        # Создаём строку для хеширования
+        hash_input = "|".join(values_to_hash)
+
+        # Вычисляем SHA256
+        hash_bytes = hashlib.sha256(hash_input.encode('utf-8')).digest()
+
+        # Возвращаем первые 16 символов hex
+        return hash_bytes.hex()[:16]
+
+    except Exception as e:
+        return "hash_error"
 
 # === БАЗОВЫЕ ТИПЫ ===
 
@@ -379,16 +490,33 @@ class DetectorSignal(TypedDict, total=False):
 
 
 class TradeSignalIQTS(TypedDict, total=False):
-    direction: Direction
+    """
+    Торговый сигнал от ImprovedQualityTrendSystem.
+
+    v2.0 Changes:
+    - Добавлен symbol (обязательно для multi-symbol поддержки)
+    - Добавлен risk_context (заменяет отдельные stop_loss/take_profit)
+    - stops_precomputed флаг для оптимизации
+    - validation_hash для аудита
+    - Backward compatibility: position_size, stop_loss, take_profit как опциональные
+    """
+    # Основные поля
+    symbol: str  # ✅ ДОБАВЛЕНО: Торговый символ (BTCUSDT, ETHUSDT, etc.)
+    direction: Direction  # Enum: Direction.BUY, Direction.SELL, Direction.FLAT
     entry_price: float
     confidence: float
     regime: MarketRegimeLiteral
     metadata: DetectorMetadata
-
-    # v2.0 — риск-контекст
-    risk_context: RiskContext  # ✅ Полный контекст
-    stops_precomputed: bool  # ✅ Флаг
-    validation_hash: Optional[str]  # ✅ Аудит
+    # v2.0 — риск-контекст (новый стандарт)
+    risk_context: RiskContext  # Полный контекст риск-параметров
+    stops_precomputed: bool  # Флаг: True если стопы уже в risk_context
+    validation_hash: Optional[str]  # SHA256 hash для проверки целостности
+    client_order_id: Optional[str]  # Уникальный ID ордера (если известен)
+    correlation_id: Optional[str]  # ID корреляции для связки событий
+    # Deprecated fields (v2.0) - для backward compatibility
+    position_size: Optional[float]  # → risk_context['position_size']
+    stop_loss: Optional[float]  # → risk_context['initial_stop_loss']
+    take_profit: Optional[float]  # → risk_context['take_profit']
 
 class TradeSignal(TypedDict, total=False):
     """Сигнал от стратегии"""
@@ -611,9 +739,9 @@ class PositionManagerInterface(Protocol):
 class ExchangeManagerInterface(Protocol):
     """Интерфейс менеджера биржи"""
 
-    async def place_order(self, order_req: OrderReq) -> Dict[str, Any]: ...
+    def place_order(self, order_req: OrderReq) -> Dict[str, Any]: ...
 
-    async def cancel_order(self, client_order_id: str) -> Dict[str, Any]: ...
+    def cancel_order(self, client_order_id: str) -> Dict[str, Any]: ...
 
     def disconnect_user_stream(self) -> None: ...
 

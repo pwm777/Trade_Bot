@@ -259,17 +259,17 @@ class RiskManagerInterface(Protocol):
             ValueError: Если входные данные некорректны
 
         Examples:
-            >>> rm = EnhancedRiskManager()
-            >>> result = rm.calculate_initial_stop(
-            ...     entry_price=3250.0,
-            ...     direction=Direction.BUY,
-            ...     stop_loss_pct=0.30,
-            ...     symbol="ETHUSDT"
-            ... )
-            >>> print(result['stop_price'])
-            3240.25
-            >>> print(result['distance_pct'])
-            0.30
+            #>>> rm = EnhancedRiskManager()
+            #>>> result = rm.calculate_initial_stop(
+            #...     entry_price=3250.0,
+            #...     direction=Direction.BUY,
+            #...     stop_loss_pct=0.30,
+            #...     symbol="ETHUSDT"
+            #... )
+            #>>> print(result['stop_price'])
+            #3240.25
+            #>>> print(result['distance_pct'])
+            #0.30
         """
         try:
             # Валидация входных данных
