@@ -18,6 +18,11 @@ class ExitDecision(TypedDict, total=False):
     details: Dict[str, Any]
     pnl_pct: float
     type: str
+    # ✅ Новые поля для управления стопами (Task 4)
+    new_stop_loss: Optional[float]
+    new_take_profit: Optional[float]
+    trailing_type: Optional[str]
+    stop_distance_pct: Optional[float]
 
 class ExitSignalDetector:
     """
@@ -781,7 +786,12 @@ class AdaptiveExitManager:
                 'distance_from_entry_pct': float(stop_pnl_threshold),
                 'trailing_pct': float(trailing_pct),
                 'entry_price': float(entry_price),
-                'current_price': float(current_price)
+                'current_price': float(current_price),
+                # ✅ Новые поля для ExitDecision (Task 4)
+                'new_stop_loss': float(new_stop),
+                'new_take_profit': None,  # Не изменяется при trailing
+                'trailing_type': 'adaptive_trailing',
+                'stop_distance_pct': float(stop_pnl_threshold)
             }
 
         except Exception as e:
@@ -792,7 +802,12 @@ class AdaptiveExitManager:
                 'reason': f'Error: {str(e)}',
                 'distance_from_entry_pct': 0.0,
                 'trailing_pct': 0.0,
-                'error': str(e)
+                'error': str(e),
+                # ✅ Новые поля для ExitDecision (Task 4) - ошибочный случай
+                'new_stop_loss': None,
+                'new_take_profit': None,
+                'trailing_type': None,
+                'stop_distance_pct': None
             }
 
     def update_trailing_state(self, position: Dict, current_price: float) -> Dict[str, Any]:

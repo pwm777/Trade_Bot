@@ -375,16 +375,22 @@ class BotLifecycleManager:
 
             # --- Exit Manager (DI) ---
             exit_manager = await self._create_exit_manager(logger)
-            validator = SignalValidator(strict_mode=self.config.get("validation", {}).get("strict_mode", False),
-                                        logger=logger)
+            
+            # --- SignalValidator (DI) ---
+            validator = SignalValidator(
+                strict_mode=self.config.get("validation", {}).get("strict_mode", False),
+                logger=logger
+            )
             logger.info("✅ SignalValidator created (DI)")
 
             # --- Exchange Manager (нужен до PositionManager для связки) ---
             exchange_manager = await self._create_exchange_manager(trade_log, logger)
 
+            # --- PositionManager with DI ---
             position_manager = await self._create_position_manager(
                 trade_log=trade_log,
-                logger=logger
+                logger=logger,
+                signal_validator=validator  # ✅ Передаём validator через DI
             )
 
             # Внедрение зависимостей, если не переданы через конструктор
@@ -395,8 +401,6 @@ class BotLifecycleManager:
             if hasattr(position_manager, 'exit_manager') and not position_manager.exit_manager and exit_manager:
                 position_manager.exit_manager = exit_manager
                 logger.info("🔗 Injected exit_manager into PositionManager")
-
-            position_manager.validator = validator
 
             # Связка execution engine
             position_manager.execution_engine = exchange_manager
@@ -812,9 +816,24 @@ class BotLifecycleManager:
         logger.info("✅ ImprovedQualityTrendSystem created and interface validated")
         return strategy_iface
 
-    async def _create_position_manager(self, trade_log: Any, logger: logging.Logger) -> PositionManagerInterface:
-        """Create PositionManager"""
-        logger.info("Creating PositionManager")
+    async def _create_position_manager(
+        self,
+        trade_log: Any,
+        logger: logging.Logger,
+        signal_validator: Optional[Any] = None
+    ) -> PositionManagerInterface:
+        """
+        Create PositionManager with Dependency Injection.
+        
+        Args:
+            trade_log: TradingLogger instance
+            logger: Logger instance
+            signal_validator: Optional SignalValidator for DI
+            
+        Returns:
+            PositionManagerInterface instance
+        """
+        logger.info("Creating PositionManager with DI")
 
         symbols = self.config.get("symbols", [])
         symbols_meta: Dict[str, Dict[str, Any]] = {}
@@ -836,10 +855,11 @@ class BotLifecycleManager:
             trade_log=trade_log,
             price_feed=None,
             execution_mode=execution_mode,
-            db_engine=None
+            db_engine=None,
+            signal_validator=signal_validator  # ✅ DI для SignalValidator
         )
         # Привяжем exchange_manager позже, после его создания
-        logger.info("PositionManager created successfully")
+        logger.info("PositionManager created successfully with SignalValidator DI")
         return cast(PositionManagerInterface, pm)
 
     async def _create_exchange_manager(self, trade_log: Any, logger: logging.Logger) -> ExchangeManagerInterface:

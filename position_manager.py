@@ -109,9 +109,13 @@ class PositionManager:
                  *,
                  price_feed: Optional[PriceFeed] = None,
                  execution_mode: Literal["LIVE", "DEMO", "BACKTEST"] = "DEMO",
-                 db_engine: Optional[Engine] = None):
+                 db_engine: Optional[Engine] = None,
+                 signal_validator: Optional[Any] = None):
 
         self.exchange_manager: Optional[ExchangeManagerInterface] = None
+        
+        # Dependency Injection: SignalValidator
+        self.signal_validator = signal_validator
 
         # Основные параметры
         self.symbols_meta = self._parse_symbols_meta(symbols_meta)
@@ -212,6 +216,14 @@ class PositionManager:
         """Преобразовать сигнал в OrderReq и сохранить в БД."""
         try:
             self._validate_signal(signal)
+            
+            # Проверка целостности risk_context (если есть validation_hash)
+            if not self._verify_risk_context(signal):
+                self._stats.invalid_signals += 1
+                self.logger.error(
+                    f"Signal rejected due to risk_context tampering: {signal.get('symbol')}"
+                )
+                return None
 
             # Проверка дедупликации
             correlation_id = signal.get("correlation_id")
@@ -1370,7 +1382,26 @@ class PositionManager:
     # === Вспомогательные методы ===
 
     def _validate_signal(self, signal: TradeSignal) -> None:
-        """Валидация торгового сигнала"""
+        """
+        Валидация торгового сигнала.
+        
+        Использует внедрённый SignalValidator если доступен,
+        иначе выполняет базовую валидацию.
+        """
+        # Используем внедрённый validator если доступен
+        if self.signal_validator and hasattr(self.signal_validator, 'validate_signal'):
+            try:
+                validation_result = self.signal_validator.validate_signal(signal)
+                if not validation_result.get('valid', False):
+                    errors = validation_result.get('errors', ['Unknown validation error'])
+                    raise InvalidSignalError(f"Signal validation failed: {', '.join(errors)}")
+                # Успешная валидация через SignalValidator
+                return
+            except AttributeError:
+                # Fallback если метод недоступен
+                self.logger.warning("SignalValidator.validate_signal() not available, using basic validation")
+        
+        # Базовая валидация (backward compatibility)
         required_fields = ["symbol", "intent", "decision_price"]
         for field in required_fields:
             if field not in signal:
@@ -1382,6 +1413,70 @@ class PositionManager:
 
         if signal["decision_price"] <= 0:
             raise InvalidSignalError("Invalid decision_price")
+
+    def _verify_risk_context(self, signal: TradeSignal) -> bool:
+        """
+        Проверка целостности risk_context через validation_hash.
+        
+        Детектирует несанкционированное изменение риск-параметров после генерации сигнала.
+        Обратная совместимость: если validation_hash отсутствует, проверка пропускается.
+        
+        Args:
+            signal: Торговый сигнал для проверки
+            
+        Returns:
+            True если проверка прошла успешно или пропущена (backward compatibility)
+            False если обнаружено несоответствие хеша
+            
+        Side Effects:
+            Логирует CRITICAL ошибку при обнаружении tampering
+        """
+        try:
+            risk_context = signal.get("risk_context")
+            
+            # Backward compatibility: если нет risk_context, пропускаем проверку
+            if not risk_context:
+                return True
+            
+            stored_hash = signal.get("validation_hash")
+            
+            # Backward compatibility: если нет validation_hash, пропускаем проверку
+            if not stored_hash:
+                self.logger.debug(
+                    f"validation_hash not found in signal for {signal.get('symbol')}, "
+                    f"skipping verification (backward compatibility)"
+                )
+                return True
+            
+            # Вычисляем текущий хеш от risk_context
+            import json
+            import hashlib
+            canonical = json.dumps(risk_context, sort_keys=True)
+            computed_hash = hashlib.sha256(canonical.encode()).hexdigest()[:16]
+            
+            # Сравниваем хеши
+            if computed_hash != stored_hash:
+                self.logger.critical(
+                    f"🚨 RISK CONTEXT TAMPERING DETECTED! 🚨\n"
+                    f"  Symbol: {signal.get('symbol')}\n"
+                    f"  Correlation ID: {signal.get('correlation_id')}\n"
+                    f"  Expected hash: {stored_hash}\n"
+                    f"  Computed hash: {computed_hash}\n"
+                    f"  Risk context was modified after signal generation!\n"
+                    f"  This is a CRITICAL security issue - rejecting signal."
+                )
+                return False
+            
+            self.logger.debug(
+                f"✅ risk_context validation passed for {signal.get('symbol')} "
+                f"(hash: {computed_hash})"
+            )
+            return True
+            
+        except Exception as e:
+            self.logger.error(f"Error verifying risk_context: {e}", exc_info=True)
+            # В случае ошибки проверки - безопаснее отклонить сигнал
+            return False
 
     def _save_position_to_db(self, position: PositionSnapshot, is_new: bool) -> None:
         """УПРОЩЕННОЕ сохранение позиции в БД - с поддержкой fee_total_usdt"""
@@ -1578,7 +1673,22 @@ class PositionManager:
     # === Расчетные методы ===
 
     def compute_order_size(self, symbol: str, risk_ctx: Dict[str, Any]) -> Decimal:
-        """Вычислить размер ордера на основе риск-контекста"""
+        """
+        Вычислить размер ордера на основе риск-контекста.
+        
+        .. deprecated::
+            Use risk_context['position_size'] instead.
+            This method will be removed in v3.0.
+        """
+        import warnings
+        warnings.warn(
+            "compute_order_size() is deprecated. "
+            "Use risk_context['position_size'] from EnhancedRiskManager instead. "
+            "This method will be removed in v3.0.",
+            DeprecationWarning,
+            stacklevel=2
+        )
+        
         try:
             # Получаем цену для расчетов
             decision_price = risk_ctx.get("decision_price")
@@ -1650,12 +1760,35 @@ class PositionManager:
         return notional >= meta.min_notional
 
     def build_entry_order(self, signal: TradeSignal, side: Literal["BUY", "SELL"]) -> Optional[OrderReq]:
-        """Построить ордер входа в позицию"""
+        """
+        Построить ордер входа в позицию.
+        
+        Приоритет определения размера:
+        1. risk_context['position_size'] (если доступен)
+        2. compute_order_size() (deprecated fallback)
+        """
         try:
             symbol = signal["symbol"]
-
-            # Вычисляем размер ордера
-            qty = self.compute_order_size(symbol, signal.get("risk_context", {}))
+            
+            # ✅ ПРИОРИТЕТ 1: Проверяем risk_context['position_size']
+            risk_context = signal.get("risk_context", {})
+            qty = None
+            
+            if risk_context and "position_size" in risk_context:
+                qty_raw = risk_context["position_size"]
+                if qty_raw and qty_raw > 0:
+                    qty = Decimal(str(qty_raw))
+                    self.logger.info(
+                        f"Using position_size from risk_context: {float(qty):.4f} for {symbol}"
+                    )
+            
+            # ✅ ПРИОРИТЕТ 2: Fallback на deprecated метод
+            if qty is None:
+                self.logger.warning(
+                    f"risk_context['position_size'] not available for {symbol}, "
+                    f"falling back to deprecated compute_order_size()"
+                )
+                qty = self.compute_order_size(symbol, risk_context)
 
             if qty <= 0:
                 raise InvalidOrderSizeError("Computed order size is zero or negative")
@@ -1913,7 +2046,20 @@ class PositionManager:
         :param decision_price: цена принятия решения
         :param side: направление позиции
         :return: цена стоп-лосса или None
+        
+        .. deprecated::
+            Use risk_manager.calculate_initial_stop() instead.
+            This method will be removed in v3.0.
         """
+        import warnings
+        warnings.warn(
+            "compute_entry_stop() is deprecated. "
+            "Use risk_manager.calculate_initial_stop() instead. "
+            "This method will be removed in v3.0.",
+            DeprecationWarning,
+            stacklevel=2
+        )
+        
         try:
             # Процент стоп-лосса (обязательный параметр)
             stop_loss_pct = kwargs.get("stop_loss_pct")
@@ -1945,7 +2091,20 @@ class PositionManager:
         """
         Вычислить новый уровень trailing stop на основе max_pnl.
         Возвращает новый стоп только если он ВЫГОДНЕЕ последнего trailing stop.
+        
+        .. deprecated::
+            Use exit_manager.calculate_trailing_stop() instead.
+            This method will be removed in v3.0.
         """
+        import warnings
+        warnings.warn(
+            "compute_trailing_level() is deprecated. "
+            "Use exit_manager.calculate_trailing_stop() instead. "
+            "This method will be removed in v3.0.",
+            DeprecationWarning,
+            stacklevel=2
+        )
+        
         try:
             # ✅ УСЛОВНОЕ логирование (только в DEBUG режиме)
             debug_enabled = self.logger.isEnabledFor(logging.DEBUG)

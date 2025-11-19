@@ -209,18 +209,45 @@ def create_trade_signal(
 ) -> Dict[str, Any]:
     """
     Factory: формирует единый TradeSignalIQTS
+    
     Гарантии:
-      - direction → Direction (enum)
+      - direction → Direction (enum) - автоматическая нормализация
+      - correlation_id генерируется автоматически если не передан
       - stops_precomputed=True если есть risk_context
-      - validation_hash добавляется автоматически
-      - entry_price/position_size > 0 проверяются минимально
+      - validation_hash добавляется автоматически для risk_context
+      - entry_price/position_size > 0 проверяются
+    
+    Args:
+        symbol: Торговый символ (обязательно)
+        direction: Направление сделки (автоматически нормализуется в Direction enum)
+        entry_price: Цена входа (должна быть > 0)
+        confidence: Уверенность в сигнале (0.0 - 1.0)
+        risk_context: Контекст риск-параметров (опционально)
+        metadata: Дополнительные метаданные (опционально)
+        regime: Режим рынка (опционально)
+        correlation_id: ID корреляции (генерируется автоматически если None)
+    
+    Returns:
+        TradeSignalIQTS словарь с полными данными
+        
+    Raises:
+        ValueError: Если entry_price <= 0 или invalid risk_context
     """
+    # Автоматическая нормализация direction
     if not isinstance(direction, Direction):
-        # автоматическая нормализация
-        direction = Direction(int(direction)) if str(direction).isdigit() else Direction.FLAT
+        # Пытаемся конвертировать числовые значения
+        if str(direction).isdigit() or isinstance(direction, int):
+            direction = Direction(int(direction))
+        else:
+            direction = Direction.FLAT
 
+    # Валидация entry_price
     if entry_price <= 0:
         raise ValueError(f"Invalid entry_price: {entry_price}")
+
+    # Автоматическая генерация correlation_id если не передан
+    if correlation_id is None:
+        correlation_id = create_correlation_id()
 
     signal: Dict[str, Any] = {
         "symbol": symbol,
@@ -234,7 +261,7 @@ def create_trade_signal(
     }
 
     if risk_context:
-        # минимальная проверка
+        # Валидация обязательных полей risk_context
         if risk_context.get("position_size", 0) <= 0:
             raise ValueError("risk_context.position_size must be > 0")
         if risk_context.get("initial_stop_loss", 0) <= 0:
@@ -244,6 +271,7 @@ def create_trade_signal(
 
         signal["risk_context"] = risk_context
         signal["stops_precomputed"] = True
+        # Автоматическая генерация validation_hash
         signal["validation_hash"] = _compute_risk_hash_light(risk_context)
     else:
         signal["stops_precomputed"] = False
