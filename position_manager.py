@@ -19,6 +19,7 @@ from iqts_standards import (
     get_current_timestamp_ms, create_correlation_id,
     ExchangeManagerInterface
 )
+from risk_manager import Direction
 
 logger = logging.getLogger(__name__)
 from config import STRATEGY_PARAMS
@@ -1229,10 +1230,13 @@ class PositionManager:
         avg_price_decimal = Decimal(str(avg_price_float))
         filled_qty_decimal = Decimal(str(filled_qty)) if not isinstance(filled_qty, Decimal) else filled_qty
 
+        # Convert position_side to Direction for comparison
+        position_direction = Direction.BUY if position_side == "LONG" else Direction.SELL
+
         # Рассчитываем PnL (используем Decimal для точности)
-        if position_side == "LONG":
+        if position_direction == Direction.BUY:
             pnl_decimal = (avg_price_decimal - entry_price_decimal) * filled_qty_decimal
-        else:  # SHORT
+        elif position_direction == Direction.SELL:
             pnl_decimal = (entry_price_decimal - avg_price_decimal) * filled_qty_decimal
 
         # Ensure both fees are Decimal
@@ -2010,8 +2014,11 @@ class PositionManager:
                     self.logger.debug(f"  Adjusted stop_pnl_threshold from {stop_pnl_threshold} to 0")
                 stop_pnl_threshold = 0
 
+            # Convert side string to Direction enum
+            direction = Direction.BUY if side == "LONG" else Direction.SELL if side == "SHORT" else Direction.FLAT
+
             # ВЫЧИСЛЯЕМ СТОП ОТ ENTRY PRICE
-            if side == "LONG":
+            if direction == Direction.BUY:
                 new_stop = entry_price * (1 + stop_pnl_threshold / 100)
 
                 if debug_enabled:
@@ -2044,7 +2051,7 @@ class PositionManager:
                     self.logger.debug(f"  Returning LONG stop: {new_stop:.8f}")
                 return new_stop
 
-            elif side == "SHORT":
+            elif direction == Direction.SELL:
                 new_stop = entry_price * (1 - stop_pnl_threshold / 100)
 
                 if debug_enabled:

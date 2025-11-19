@@ -21,6 +21,7 @@ OrderReq, OrderUpd,Candle1m,
     # Утилиты
     get_current_timestamp_ms
 )
+from risk_manager import Direction
 
 logger = logging.getLogger(__name__)
 
@@ -926,9 +927,12 @@ class TradingLogger:
                 position_usdt = position.get("position_usdt")
 
                 if entry_price and exit_price and qty and side:
-                    if side == "LONG":
+                    # Convert side string to Direction enum
+                    direction = Direction.BUY if side == "LONG" else Direction.SELL
+
+                    if direction == Direction.BUY:
                         gross_pnl_usdt = (exit_price - entry_price) * qty
-                    else:
+                    elif direction == Direction.SELL:
                         gross_pnl_usdt = (entry_price - exit_price) * qty
 
                     if position_usdt and position_usdt > 0:

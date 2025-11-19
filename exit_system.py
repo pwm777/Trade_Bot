@@ -7,6 +7,7 @@ import logging
 from iqts_standards import (DetectorSignal, DirectionLiteral,
             validate_market_data, Timeframe, normalize_direction)
 from iqts_detectors import (RoleBasedOnlineTrendDetector, MLGlobalTrendDetector)
+from risk_manager import Direction
 
 class ExitDecision(TypedDict, total=False):
     should_exit: bool
@@ -359,11 +360,11 @@ class AdaptiveExitManager:
                            current_price: float,
                            direction: DirectionLiteral) -> float:
         """Расчет PnL в процентах"""
-        if direction == 1:  # ✅ BUY (числовое значение)
+        if direction == Direction.BUY:
             return (current_price - entry_price) / entry_price
-        elif direction == -1:  # ✅ SELL (числовое значение)
+        elif direction == Direction.SELL:
             return (entry_price - current_price) / entry_price
-        else:  # direction == 0 (FLAT/HOLD)
+        else:
             return 0.0
 
     async def should_exit_position(self,
@@ -475,7 +476,7 @@ class AdaptiveExitManager:
         })
 
     def _check_hard_exits(self,
-                          direction: DirectionLiteral,  # ✅ Уже правильный тип
+                          direction: DirectionLiteral,
                           current_price: float,
                           stop_loss: float,
                           take_profit: float,
@@ -484,15 +485,15 @@ class AdaptiveExitManager:
         """Проверка жестких условий выхода"""
 
         # 1. Стоп-лосс
-        if direction == 1 and current_price <= stop_loss:  # ✅ BUY
+        if direction == Direction.BUY and current_price <= stop_loss:
             return {'should_exit': True, 'reason': 'stop_loss_hit', 'type': 'hard'}
-        elif direction == -1 and current_price >= stop_loss:  # ✅ SELL
+        elif direction == Direction.SELL and current_price >= stop_loss:
             return {'should_exit': True, 'reason': 'stop_loss_hit', 'type': 'hard'}
 
         # 2. Тейк-профит
-        if direction == 1 and current_price >= take_profit:  # ✅ BUY
+        if direction == Direction.BUY and current_price >= take_profit:
             return {'should_exit': True, 'reason': 'take_profit_hit', 'type': 'hard'}
-        elif direction == -1 and current_price <= take_profit:  # ✅ SELL
+        elif direction == Direction.SELL and current_price <= take_profit:
             return {'should_exit': True, 'reason': 'take_profit_hit', 'type': 'hard'}
 
         # 3. Адаптивное максимальное время
@@ -538,9 +539,9 @@ class AdaptiveExitManager:
             position['exit_tracking'] = tracking
 
         # Обновляем пик цены
-        if direction == 1:  # ✅ BUY
+        if direction == Direction.BUY:
             tracking['peak_price'] = max(tracking['peak_price'], current_price)
-        else:  # direction == -1  # ✅ SELL
+        elif direction == Direction.SELL:
             tracking['peak_price'] = min(tracking['peak_price'], current_price)
 
         # 1. Break-even стоп (при небольшой прибыли)
@@ -597,19 +598,19 @@ class AdaptiveExitManager:
 
         # Break-even стоп (безубыток + буфер)
         if pnl_pct >= self.breakeven_activation and tracking.get('breakeven_moved', False):
-            if direction == 1:  # ✅ BUY
+            if direction == Direction.BUY:
                 new_stop_loss = entry_price * 1.002  # +0.2% буфер
-            else:  # direction == -1  # ✅ SELL
+            elif direction == Direction.SELL:
                 new_stop_loss = entry_price * 0.998  # -0.2% буфер
 
         # Трейлинг стоп (двигается за ценой)
         if tracking.get('trailing_active', False):
             peak_price = tracking.get('peak_price', current_price)
 
-            if direction == 1:  # ✅ BUY
+            if direction == Direction.BUY:
                 trailing_stop = peak_price * (1 - self.trailing_stop_distance)
                 new_stop_loss = max(new_stop_loss, trailing_stop)  # Никогда не опускаем
-            else:  # direction == -1  # ✅ SELL
+            elif direction == Direction.SELL:
                 trailing_stop = peak_price * (1 + self.trailing_stop_distance)
                 new_stop_loss = min(new_stop_loss, trailing_stop)  # Никогда не поднимаем
 
@@ -699,8 +700,11 @@ class AdaptiveExitManager:
                 f"(max_pnl={max_pnl_percent:.2f}% - trailing={trailing_pct:.2f}%)"
             )
 
+            # Convert side string to Direction enum
+            direction = Direction.BUY if side == "LONG" else Direction.SELL if side == "SHORT" else Direction.FLAT
+
             # Расчёт новой цены стопа от entry_price
-            if side == "LONG":
+            if direction == Direction.BUY:
                 # Для лонга: стоп = entry * (1 + stop_pnl_threshold/100)
                 new_stop = entry_price * (1 + stop_pnl_threshold / 100)
 
@@ -732,7 +736,7 @@ class AdaptiveExitManager:
                         'trailing_pct': trailing_pct
                     }
 
-            elif side == "SHORT":
+            elif direction == Direction.SELL:
                 # Для шорта: стоп = entry * (1 - stop_pnl_threshold/100)
                 new_stop = entry_price * (1 - stop_pnl_threshold / 100)
 
@@ -810,7 +814,7 @@ class AdaptiveExitManager:
         if entry_price <= 0 or current_price <= 0:
             return {'changed': False, 'reason': 'invalid_price'}
 
-        direction = 1 if direction_raw in (1, "BUY", "LONG") else -1 if direction_raw in (-1, "SELL", "SHORT") else 0
+        direction = normalize_direction(direction_raw)
 
         tracking = position.get("exit_tracking")
         if tracking is None:
@@ -822,13 +826,13 @@ class AdaptiveExitManager:
             position["exit_tracking"] = tracking
 
         # Обновление peak_price
-        if direction == 1:
+        if direction == Direction.BUY:
             tracking["peak_price"] = max(tracking["peak_price"], current_price)
-        elif direction == -1:
+        elif direction == Direction.SELL:
             tracking["peak_price"] = min(tracking["peak_price"], current_price)
 
-        pnl_pct = (current_price - entry_price) / entry_price if direction == 1 else (
-                                                                                                 entry_price - current_price) / entry_price if direction == -1 else 0.0
+        pnl_pct = (current_price - entry_price) / entry_price if direction == Direction.BUY else (
+                                                                                                 entry_price - current_price) / entry_price if direction == Direction.SELL else 0.0
 
         new_stop = original_stop
         changed = False
@@ -837,9 +841,9 @@ class AdaptiveExitManager:
         # breakeven
         if pnl_pct >= self.breakeven_activation and not tracking["breakeven_moved"]:
             tracking["breakeven_moved"] = True
-            if direction == 1:
+            if direction == Direction.BUY:
                 new_stop = entry_price * 1.002  # +0.2%
-            else:
+            elif direction == Direction.SELL:
                 new_stop = entry_price * 0.998  # -0.2%
             changed = True
             reason = "breakeven_adjust"
@@ -848,13 +852,13 @@ class AdaptiveExitManager:
         if pnl_pct >= self.trailing_stop_activation:
             tracking["trailing_active"] = True
             peak = tracking["peak_price"]
-            if direction == 1:
+            if direction == Direction.BUY:
                 trailing_stop = peak * (1 - self.trailing_stop_distance)
                 if trailing_stop > new_stop:
                     new_stop = trailing_stop
                     changed = True
                     reason = "trailing_adjust"
-            elif direction == -1:
+            elif direction == Direction.SELL:
                 trailing_stop = peak * (1 + self.trailing_stop_distance)
                 if trailing_stop < new_stop:
                     new_stop = trailing_stop
