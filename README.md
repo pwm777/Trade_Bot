@@ -1,74 +1,80 @@
 # ML-Enhanced Hierarchical Trading System
 
+![Python 3.8+](https://img.shields.io/badge/python-3.8%2B-blue.svg) ![LightGBM 4.0+](https://img.shields.io/badge/lightgbm-4.0%2B-green.svg) ![MIT License](https://img.shields.io/badge/license-MIT-yellow.svg)
+
 ## Project Overview
-This project leverages machine learning techniques to enhance trading strategies within a hierarchical trading system, providing data-driven insights and recommendations.
+This project implements a Machine Learning-Enhanced Hierarchical Trading System using LightGBM. The goal of the system is to optimize trading strategies through real-time data analysis and a two-level confirmator structure.
 
-## Architecture
-The system is designed using a microservices architecture, allowing independent deployment of components such as data ingestion, model training, and execution strategies.
+## Architecture Diagrams
+![Architecture Diagram](path/to/architecture_diagram.png)
 
-## Features
-- Advanced algorithmic trading capabilities.
-- Integration with financial market APIs.
-- Real-time analytics and reporting.
-- User-friendly interface for configuration and monitoring.
+## ML Pipeline
+The ML pipeline consists of a robust framework with 17 features that contribute to improved prediction accuracy. Key features include:
+- Feature 1
+- Feature 2
+- ...
+- Feature 17
 
-## Installation
-1. Clone the repository.
+## Installation Guide
+1. Clone the repository:
+   ```bash
+   git clone https://github.com/pwm777/Trade_Bot.git
+   cd Trade_Bot
+   ```
 2. Install dependencies:
    ```bash
    pip install -r requirements.txt
    ```
-3. Configure environment variables.
 
-## Quick Start
-To start the application, run:
-```bash
-python main.py
-```
+## Quick Start Steps
+1. Set up configuration in `config.yaml`.
+2. Run the main script:
+   ```bash
+   python main.py
+   ```
 
 ## Project Structure
 ```
 Trade_Bot/
-│
 ├── src/
-│   ├── main.py
-│   ├── trading_algorithm.py
-│   └── ml_pipeline.py
-├── data/
-│   ├── raw/
-│   ├── processed/
-│   └── models/
 ├── tests/
 └── README.md
 ```
 
-## ML Pipeline
-The ML pipeline includes data preprocessing, feature engineering, model training, and evaluation phases, all automated for optimal performance.
-
-## Configuration
-Configuration files are located in the `config/` directory and include settings for data sources, model parameters, and logger settings.
+## Configuration Examples
+### Example Configuration
+- **Model Type**: LightGBM
+- **Risk Management**: Adaptive
 
 ## Monitoring
-The system provides real-time monitoring capabilities through a dashboard that visualizes key performance indicators and alerts on anomalies.
+Utilize monitoring tools to track model performance and trading outcomes.
 
 ## FAQ
-- **What is the purpose of this project?**  
-  To enhance trading strategies using machine learning.
-- **How can I contribute?**  
-  You can contribute by submitting a pull request for new features or bug fixes.
+**Q: What is the model's prediction horizon?**  
+A: The model primarily focuses on short to medium-term predictions.
 
-## SQL Database Structure
-The SQL database consists of the following tables:
-- `trades`: Store all executed trades.
-- `orders`: Store orders created in the system.
-- `users`: Store user information and settings.
+**Q: How often should the model be retrained?**  
+A: It is recommended to retrain the model weekly to incorporate new data.
 
 ## Development Guidelines
-- Follow the coding standards outlined in the `CONTRIBUTING.md`.
-- Write unit tests for all new features.
-- Document any changes made to the codebase.
+- Follow code style conventions.
+- Write tests for new features.
 
-## Roadmap
-- **Q1 2026**: Implement advanced analytics features.
-- **Q2 2026**: Expand to additional financial markets.
-- **Q3 2026**: Improve user interface for better usability.
+## Roadmap for v2.1 and v3.0
+- **v2.1**: Enhance feature extraction and include additional risk management strategies.
+- **v3.0**: Expand to multi-asset trading strategies and improve the UI.
+
+## Two-Level Hierarchical Confirmator
+The system employs a 2-level hierarchical confirmator consisting of:
+- **5m ML Detector**: Utilizes CUSUM fallback to determine trades with higher confidence.
+- **1m CUSUM Detector**: Provides real-time confirmations to enhance trading decisions.
+
+## Adaptive Risk Management
+Integrates adaptive risk management techniques to adjust position sizes based on market volatility and machine learning predictions.
+
+## Production-Ready Features
+Key features ready for production include:
+- Real-time data streaming capabilities
+- Error handling and logging for trade executions
+
+---
