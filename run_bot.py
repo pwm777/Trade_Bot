@@ -1831,7 +1831,14 @@ async def main():
     if errors:
         raise RuntimeError(f"Config errors: {errors}")
 
-    runtime_cfg = cfg.build_runtime_config()
+    # ✅ Auto-detect BACKTEST mode from config
+    if cfg.EXECUTION_MODE == "BACKTEST":
+        print("🔍 Detected EXECUTION_MODE='BACKTEST' in config, using run_backtest_mode()")
+        await run_backtest_mode()
+        return
+
+    # For DEMO/LIVE modes, trading_logger not needed upfront
+    runtime_cfg = cfg.build_runtime_config(trading_logger=None)
 
     def event_handler(event: BotLifecycleEvent) -> None:
         event_type = event['event_type']
