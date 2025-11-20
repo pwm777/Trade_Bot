@@ -41,7 +41,7 @@ TABLES: Dict[str, str] = {
 # Основные флаги
 DEMO_MODE: bool = True
 IS_TESTNET: bool = False
-EXECUTION_MODE: Literal["LIVE", "DEMO", "BACKTEST"] = "DEMO"
+EXECUTION_MODE: Literal["LIVE", "DEMO", "BACKTEST"] = "BACKTEST"
 
 # === WEBSOCKET НАСТРОЙКИ ===
 
@@ -403,7 +403,7 @@ def get_default_config():
         }
     }
 
-def build_runtime_config(trading_logger: Optional[Any] = None) -> Dict[str, Any]:
+async def build_runtime_config(trading_logger: Optional[Any] = None) -> Dict[str, Any]:
     """
     Единый конфиг для запуска бота и агрегатора.
     Args:
@@ -429,7 +429,7 @@ def build_runtime_config(trading_logger: Optional[Any] = None) -> Dict[str, Any]
         try:
             from market_data_utils import MarketDataUtils
             utils = MarketDataUtils(trading_logger.market_engine)
-            start_ts, end_ts = utils.get_backtest_range(TRADING_SYMBOLS)
+            start_ts, end_ts = await utils.get_backtest_range(TRADING_SYMBOLS)
 
             backtest_config.update({
                 "start_time_ms": int(start_ts),

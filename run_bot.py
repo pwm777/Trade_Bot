@@ -1911,7 +1911,7 @@ async def run_backtest_mode():
     """Запуск бота в режиме BACKTEST c автозавершением и финальным отчётом."""
     from backtest_setup import build_backtest_config
 
-    runtime_cfg = build_backtest_config()
+    runtime_cfg = await build_backtest_config()
 
     errors = cfg.validate_config()
     if errors:
