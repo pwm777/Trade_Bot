@@ -8,5 +8,4 @@ venv/
 *.sqlite
 *.sqlite-shm
 *.sqlite-wal
-*.joblib
 *.diff

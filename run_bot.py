@@ -557,7 +557,7 @@ class BotLifecycleManager:
                     # 6. Передаём свечу в main_bot для обновления буферов
                     if hasattr(main_bot, 'handle_candle_ready'):
                         try:
-                            main_bot.handle_candle_ready(symbol, candle, recent)
+                            await main_bot.handle_candle_ready(symbol, candle, recent)
                         except Exception as handle_err:
                             logger.error(f"Error in handle_candle_ready: {handle_err}")
 
@@ -1247,60 +1247,58 @@ class BotLifecycleManager:
             async def _load_from_db(self, symbol: str, timeframe: str, limit: int = 1000) -> Optional[pd.DataFrame]:
                 """
                 Загрузить исторические данные из БД.
-                ✅ ИСПРАВЛЕНО: SQL запросы выполняются в executor, не блокируя event loop.
+                ✅ ИСПРАВЛЕНО: Универсальная обработка async/sync методов
                 """
                 try:
-                    import asyncio
-
                     if timeframe == '1m':
                         actual_limit = min(limit, 500)
-                        # ✅ Выполняем синхронный SQL в executor
-                        loop = asyncio.get_event_loop()
-                        data = await loop.run_in_executor(
-                            None,
-                            lambda: self.utils.read_candles_1m(symbol=symbol, last_n=actual_limit)
-                        )
+                        read_method = self.utils.read_candles_1m
                     elif timeframe == '5m':
                         actual_limit = min(limit, 200)
-                        # ✅ Выполняем синхронный SQL в executor
-                        loop = asyncio.get_event_loop()
-                        data = await loop.run_in_executor(
-                            None,
-                            lambda: self.utils.read_candles_5m(symbol=symbol, last_n=actual_limit)
-                        )
+                        read_method = self.utils.read_candles_5m
                     else:
                         self.logger.warning(f"Unsupported timeframe for DB load: {timeframe}")
                         return None
 
+                    # ✅ УНИВЕРСАЛЬНЫЙ ВЫЗОВ: Проверяем async или sync
+                    if asyncio.iscoroutinefunction(read_method):
+                        # Async version
+                        self.logger.debug(f"Calling async {read_method.__name__} for {symbol} {timeframe}")
+                        data = await read_method(symbol=symbol, last_n=actual_limit)
+                    else:
+                        # Sync version - запускаем в executor чтобы не блокировать event loop
+                        self.logger.debug(f"Calling sync {read_method.__name__} for {symbol} {timeframe} in executor")
+                        loop = asyncio.get_event_loop()
+                        data = await loop.run_in_executor(
+                            None,
+                            lambda: read_method(symbol=symbol, last_n=actual_limit)
+                        )
+
+                    # ✅ Валидация данных
                     if not data:
                         self.logger.warning(f"No data returned from DB for {symbol} {timeframe}")
                         return None
 
-                    # Конвертируем в DataFrame
-                    df = pd.DataFrame(data)
+                    if not isinstance(data, list):
+                        self.logger.error(f"Invalid data type: {type(data)} (expected list)")
+                        return None
 
-                    # ✅ ДОБАВИТЬ: Создаем timestamp из ts для ML-модели
+                    if len(data) == 0:
+                        self.logger.warning(f"Empty data list for {symbol} {timeframe}")
+                        return None
+
+                    # ✅ Конвертируем в DataFrame
+                    try:
+                        df = pd.DataFrame(data)
+                    except ValueError as ve:
+                        self.logger.error(
+                            f"DataFrame creation failed: {ve}, data sample: {data[:2] if len(data) > 0 else 'empty'}")
+                        return None
+
+                    # ✅ Создаем timestamp из ts для ML-модели
                     if 'ts' in df.columns:
                         df['timestamp'] = pd.to_datetime(df['ts'], unit='ms', utc=True)
-                        df = df.set_index('timestamp')  # ✅ Устанавливаем индекс как в обучении
-
-                    # ✅ ВАЛИДАЦИЯ: Проверяем порядок данных (должен быть ASC)
-                    if 'ts' in df.columns and len(df) > 1:
-                        first_ts = df['ts'].iloc[0]
-                        last_ts = df['ts'].iloc[-1]
-                        is_asc = first_ts < last_ts
-
-                        if not is_asc:
-                            self.logger.error(
-                                f"❌ CRITICAL: Wrong data order for {symbol} {timeframe}! "
-                                f"Expected ASC (oldest first), got DESC. "
-                                f"First ts={first_ts}, Last ts={last_ts}"
-                            )
-                        else:
-                            self.logger.debug(
-                                f"✅ Data order OK for {symbol} {timeframe}: ASC "
-                                f"(first ts={first_ts}, last ts={last_ts})"
-                            )
+                        df = df.set_index('timestamp')
 
                     self.logger.info(
                         f"✅ Loaded {len(df)} rows from DB for {symbol} {timeframe} "
