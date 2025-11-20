@@ -252,14 +252,10 @@ python market_history.py
 ```bash
 # Полуавтоматическая разметка разворотов
 python ml_labeling_tool_v3.py \
-  --mode semiauto \
-  --input data/eth_usdt_5m_historical.csv \
-  --output data/eth_usdt_5m_labeled.csv \
-  --window 20 \
-  --threshold 0.02
+
 
 # Интерактивный просмотр разворотов, подтверждение/отклонение
-# Результат: data/eth_usdt_5m_labeled.csv
+# Результат: data/market_data.sqlite с таблицами разметки
 ```
 
 ### Шаг 3: Обучение модели
