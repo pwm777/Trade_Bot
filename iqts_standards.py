@@ -699,6 +699,20 @@ class StrategyInterface(Protocol):
 
     def get_required_history(self) -> int: ...
 
+    async def analyze_and_trade(
+            self,
+            market_data: Dict[str, pd.DataFrame]
+    ) -> Optional[TradeSignalIQTS]:
+        """Совместимость с TradingSystemInterface"""
+        ...
+
+    def get_system_status(self) -> SystemStatus:
+        """Статус торговой системы"""
+        ...
+
+    def update_performance(self, trade_result: Dict[str, Any]) -> None:
+        """Обновление метрик производительности"""
+        ...
 
 # === EVENT HANDLERS ===
 class MarketEvent(TypedDict, total=False):
