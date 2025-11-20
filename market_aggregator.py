@@ -892,14 +892,19 @@ class BacktestMarketAggregatorFixed(BaseMarketAggregator):
         """Воспроизведение исторических данных"""
         self.logger.info(f"Starting replay from {from_ts} to {to_ts} for {symbols}")
 
-        # Определяем таблицу на основе interval_ms
-        table_name = "candles_1m" if self.interval_ms == 60_000 else "candles_5m" if self.interval_ms == 300_000 else "candles_10s"
-
-        sql = text(f"""
-            SELECT symbol, ts, ts_close, open, high, low, close, volume, count, quote, finalized, checksum, created_ts
-            FROM {table_name}
+        # ✅ Load BOTH 1m and 5m candles with UNION query
+        sql = text("""
+            SELECT '1m' as timeframe, symbol, ts, ts_close, open, high, low, close, volume, count, quote, finalized, checksum, created_ts
+            FROM candles_1m
             WHERE symbol = :symbol AND ts >= :from_ts AND ts <= :to_ts
-            ORDER BY ts ASC
+            
+            UNION ALL
+            
+            SELECT '5m' as timeframe, symbol, ts, ts_close, open, high, low, close, volume, count, quote, finalized, checksum, created_ts
+            FROM candles_5m
+            WHERE symbol = :symbol AND ts >= :from_ts AND ts <= :to_ts
+            
+            ORDER BY ts ASC, timeframe ASC
         """)
 
         try:
@@ -914,8 +919,13 @@ class BacktestMarketAggregatorFixed(BaseMarketAggregator):
 
                     set_simulated_time(int(r["ts"]))
 
+                    # ✅ Extract timeframe metadata
+                    candle_dict = dict(r)
+                    timeframe = candle_dict.pop('timeframe', '1m')
+                    
                     # Используем базовый метод преобразования
-                    candle = self._candle_dict_to_candle1m(dict(r))
+                    candle = self._candle_dict_to_candle1m(candle_dict)
+                    candle['_timeframe'] = timeframe  # ✅ Add metadata for downstream processing
 
                     self._symbol_buffers[s].append(candle)
                     recent = list(self._symbol_buffers[s])[-50:]

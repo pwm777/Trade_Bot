@@ -512,7 +512,8 @@ class BotLifecycleManager:
 
             async def on_candle_ready(symbol: str, candle: Candle1m, recent: List[Candle1m]) -> None:
                 """Обработчик готовой свечи - сохраняет в БД и вызывает детекторы стратегии"""
-                logger.info(f"🎯 on_candle_ready received: {symbol} @ {candle['ts']}")
+                timeframe_label = candle.get('_timeframe', '?')
+                logger.info(f"🎯 on_candle_ready received: {symbol} @ {candle['ts']} (_timeframe={timeframe_label})")
 
                 try:
                     # 1. Сохраняем свечу для истории
@@ -531,16 +532,19 @@ class BotLifecycleManager:
                         return
 
                     # 3. Определяем таймфрейм по интервалу свечи
-                    interval_ms = candle.get('ts_close', 0) - candle.get('ts', 0) + 1
-                    timeframe = None
+                    # ✅ Priority: use metadata from aggregator
+                    timeframe = candle.get('_timeframe')
 
-                    if 59_000 <= interval_ms <= 61_000:  # ~60 секунд = 1m
-                        timeframe = '1m'
-                    elif 299_000 <= interval_ms <= 301_000:  # ~300 секунд = 5m
-                        timeframe = '5m'
-                    else:
-                        logger.debug(f"Skipping analysis for interval {interval_ms}ms (not 1m or 5m)")
-                        return
+                    # Fallback: calculate from interval (backward compatibility)
+                    if not timeframe:
+                        interval_ms = candle.get('ts_close', 0) - candle.get('ts', 0) + 1
+                        if 59_000 <= interval_ms <= 61_000:  # ~60 секунд = 1m
+                            timeframe = '1m'
+                        elif 299_000 <= interval_ms <= 301_000:  # ~300 секунд = 5m
+                            timeframe = '5m'
+                        else:
+                            logger.debug(f"Skipping analysis for interval {interval_ms}ms (not 1m or 5m)")
+                            return
 
                     # 5. Получаем компоненты
                     main_bot = self._components.main_bot
