@@ -3014,14 +3014,7 @@ CREATE TABLE candles_1m (
 =======================================================
 ### Таблица candles_5m
 
-```plaintext
-Tree structure:
-    trade_bot.py
-    +-- Class1
-    +-- Class2
-    ¦   L-- Method1
-    L-- Class3
-```
+
 sql
 CREATE TABLE candles_5m (
       symbol              TEXT    NOT NULL,
@@ -3070,12 +3063,11 @@ CREATE TABLE candles_5m (
       cusum_neg REAL,
       PRIMARY KEY(symbol, ts)
     )
-```
+
 ===========================================================	
 	
 ### Таблица orders
 
-```
 sql
 CREATE TABLE orders (
                         client_order_id TEXT PRIMARY KEY,
@@ -3095,17 +3087,11 @@ CREATE TABLE orders (
                         created_ts BIGINT DEFAULT (strftime('%s','now')*1000),
                         updated_ts BIGINT DEFAULT (strftime('%s','now')*1000)
                     )
-```
+
 =============================================================			
 ### Таблица positions
 ## 6. Module: additional_info.py
 
-```plaintext
-Tree structure:
-    additional_info.py
-    +-- Info1
-    L-- Info2
-```
 sql
 CREATE TABLE positions (
                         id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -3128,11 +3114,11 @@ CREATE TABLE positions (
                         created_ts BIGINT DEFAULT (strftime('%s','now')*1000),
                         updated_ts BIGINT DEFAULT (strftime('%s','now')*1000)
                     )
-```
+
 ====================================================================
 ### Таблица trades
 
-```
+
 CREATE TABLE trades (
                         id INTEGER PRIMARY KEY AUTOINCREMENT,
                         symbol TEXT NOT NULL,
@@ -3153,10 +3139,8 @@ CREATE TABLE trades (
                         exit_reason TEXT,
                         bars_in_trade INTEGER
                     )
-```
 ===================================================================
 ### positions_risk_audit
-```
 CREATE TABLE IF NOT EXISTS positions_risk_audit (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     position_id INTEGER NOT NULL,
