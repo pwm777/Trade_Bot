@@ -17,7 +17,7 @@ _DEFAULT_TABLES: Dict[str, str] = {
     "1m":  "candles_1m",
     "5m":  "candles_5m",
 }
-_PRIORITY = ["10s", "1m", "5m"]  # выбор по приоритету, если cfg.BACKTEST_TIMEFRAME не задан
+_PRIORITY = ["1m", "5m"]  # выбор по приоритету, если cfg.BACKTEST_TIMEFRAME не задан
 
 
 # ----------------- Helpers (SQLAlchemy) -----------------
@@ -30,7 +30,6 @@ def _get_engine() -> Engine:
     if not isinstance(dsn, str) or not dsn:
         raise ValueError("Invalid or missing cfg.MARKET_DB_DSN")
     return create_engine(dsn, future=True)
-
 
 def _table_exists(engine: Engine, table: str) -> bool:
     return inspect(engine).has_table(table)
