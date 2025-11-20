@@ -10,7 +10,7 @@ from __future__ import annotations
 from collections import deque
 import asyncio
 import logging
-from typing import Dict, List, Optional, cast, Literal, Any
+from typing import Dict, List, Optional, cast, Literal
 from datetime import datetime
 import pandas as pd
 import numpy as np
@@ -157,6 +157,7 @@ class EnhancedTradingBot:
         self.loop_count = 0
         self.last_signal_time = None
         self.last_trade_time = None
+        self._monitor_task: Optional[asyncio.Task] = None
 
         # Безопасное получение статуса
         try:
@@ -213,7 +214,7 @@ class EnhancedTradingBot:
             await self._validate_connections()
 
             if self.config.get('monitoring', {}).get('enabled', True):
-                asyncio.create_task(
+                self._monitor_task = asyncio.create_task(
                     self.monitoring_system.monitor_enhanced_performance(self.trading_system)
                 )
 
@@ -246,7 +247,7 @@ class EnhancedTradingBot:
             self.logger.error(f"Connection validation failed: {e}")
             raise
 
-
+    # Строка 250-264
     async def _get_market_data(self) -> Optional[Dict[str, pd.DataFrame]]:
         """Получение рыночных данных"""
         try:
@@ -255,13 +256,14 @@ class EnhancedTradingBot:
             )
 
             if not _basic_validate_market_data(market_data):
-                return None
+                self.logger.error(f"Market data validation failed for {self.symbol}")
+                raise ValueError(f"Invalid market data for {self.symbol}")  # ✅ Кидаем exception
 
             return market_data
 
         except Exception as e:
             self.logger.error(f"Error getting market data: {e}")
-            return None
+            raise  # ✅ Пробрасываем выше
 
     def _parse_timeframe(self, tf: str) -> int:
         """Преобразует строку таймфрейма в секунды для сравнения."""
@@ -346,7 +348,7 @@ class EnhancedTradingBot:
             return None
 
     @validate_signal(signal_type="trade_iqts", layer="bot_process", strict=False)
-    async def _process_trade_signal(self, trade_signal: Dict[str, Any]):
+    async def _process_trade_signal(self, trade_signal: TradeSignalIQTS):
         """
         ✅ ОБНОВЛЕНО: Обработка через PositionManager с поддержкой risk_context.
 
@@ -445,15 +447,40 @@ class EnhancedTradingBot:
                     f"side={order_req['side']}"
                 )
 
-                # ✅ ШАГ 3: Отправляем OrderReq на биржу
-                from iqts_standards import get_current_timestamp_ms
+                # ✅ ШАГ 3: Отправляем OrderReq на биржу через ExchangeManager
+                exchange_method = getattr(self.execution_engine, 'place_order', None)
 
-                execution_result = {
-                    'success': True,
-                    'position_id': f"{pm_signal['symbol']}_{get_current_timestamp_ms()}",
-                    'order_id': order_req['client_order_id'],
-                    'message': 'Order sent to exchange via PositionManager'
-                }
+                if not exchange_method:
+                    execution_result = {
+                        'success': False,
+                        'error': 'ExchangeManager.place_order not available',
+                        'position_id': None
+                    }
+                else:
+                    # Отправляем на биржу
+                    exchange_result = exchange_method(order_req)
+                    if asyncio.iscoroutine(exchange_result):
+                        exchange_result = await exchange_result
+
+                    if not isinstance(exchange_result, dict):
+                        exchange_result = {"success": bool(exchange_result)}
+
+                    # ✅ Проверяем статус от биржи
+                    status = exchange_result.get("status", "")
+                    success = status in ["NEW", "FILLED", "WORKING"] or exchange_result.get("success", False)
+
+                    execution_result = {
+                        'success': success,
+                        'position_id': f"{pm_signal['symbol']}_{order_req['client_order_id']}",
+                        'order_id': order_req['client_order_id'],
+                        'exchange_order_id': exchange_result.get("orderId") or exchange_result.get("exchange_order_id"),
+                        'status': status,
+                        'message': 'Order sent to exchange via PositionManager'
+                    }
+
+                    if not success:
+                        execution_result['error'] = exchange_result.get("error_message") or exchange_result.get(
+                            "error") or "Unknown error"
 
             # ✅ ШАГ 4: Логирование с risk_context и slippage
             if trade_signal.get('stops_precomputed', False) and order_req:
@@ -478,17 +505,17 @@ class EnhancedTradingBot:
                             f"(planned: {planned_sl:.2f}, actual: {actual_sl:.2f})"
                         )
 
-                    # ✅ ОПЦИОНАЛЬНО: Сохранение в TradingLogger (если есть доступ)
-                    if hasattr(self, 'trading_logger'):
+                    if hasattr(self, 'logger'):
                         try:
-                            self.trading_logger.record_signal(
-                                symbol=pm_signal['symbol'],
-                                signal_type="TRADE_EXECUTED_WITH_RISK_CONTEXT",
-                                risk_context=risk_ctx,
-                                order_req=order_req,
-                                slippage_pct=slippage_pct,
-                                validation_hash=trade_signal.get('validation_hash'),
-                                correlation_id=pm_signal.get('correlation_id')
+                            self.logger.info(
+                                f"TRADE_EXECUTED_WITH_RISK_CONTEXT: "
+                                f"symbol={pm_signal['symbol']}, "
+                                f"correlation_id={pm_signal.get('correlation_id')[:16]}..., "
+                                f"size={risk_ctx.get('position_size', 0):.4f}, "
+                                f"SL={risk_ctx.get('initial_stop_loss', 0):.2f}, "
+                                f"TP={risk_ctx.get('take_profit', 0):.2f}, "
+                                f"slippage={slippage_pct:.4f}%, "
+                                f"validation_hash={trade_signal.get('validation_hash', 'N/A')[:8]}"
                             )
                         except Exception as e:
                             self.logger.warning(f"Failed to log risk_context: {e}")
@@ -628,22 +655,25 @@ class EnhancedTradingBot:
             old_stop_loss = position['signal'].get('stop_loss', 0.0)
 
             # Валидация нового уровня
-            direction = position['signal'].get('direction', 'FLAT')
+            # Строка 631
+            direction = position['signal'].get('direction', 0)  # ✅ Default int
             current_price = position.get('exit_tracking', {}).get('peak_price', 0.0)
 
-            if direction == 'BUY':
+            # Строка 634-645
+            from iqts_standards import Direction
+
+            if direction == Direction.BUY or direction == 1:  # ✅ Поддержка обоих форматов
                 if new_stop_loss >= current_price:
                     self.logger.error(
                         f"Invalid SL for BUY: {new_stop_loss} >= current {current_price}"
                     )
                     return
-            elif direction == 'SELL':
+            elif direction == Direction.SELL or direction == -1:  # ✅ Поддержка обоих форматов
                 if new_stop_loss <= current_price:
                     self.logger.error(
                         f"Invalid SL for SELL: {new_stop_loss} <= current {current_price}"
                     )
                     return
-
             # Отправляем изменение брокеру
             try:
                 # ✅ РЕАЛИЗАЦИЯ зависит от вашего execution_engine
@@ -1070,27 +1100,103 @@ class EnhancedTradingBot:
             self.logger.critical(f"Error during emergency shutdown: {e}", exc_info=True)
 
     async def shutdown(self):
-        """Корректное завершение работы бота"""
+        """
+        Корректное завершение работы бота с обработкой всех ресурсов.
+
+        Выполняет:
+        - Отмену фоновых задач (мониторинг)
+        - Корректное завершение trading_system (async/sync)
+        - Остановку monitoring_system
+        - Финальную статистику
+        - Логирование всех этапов
+        """
         self.logger.info("Shutting down Enhanced Trading Bot...")
         self.is_running = False
 
         try:
+            # ✅ ШАГ 1: Отменяем фоновые задачи мониторинга
+            if hasattr(self, '_monitor_task') and self._monitor_task:
+                if not self._monitor_task.done():
+                    self.logger.info("Cancelling monitoring task...")
+                    self._monitor_task.cancel()
+                    try:
+                        await self._monitor_task
+                    except asyncio.CancelledError:
+                        self.logger.info("Monitoring task cancelled successfully")
+                    except Exception as e:
+                        self.logger.warning(f"Error cancelling monitoring task: {e}")
+
+            # ✅ ШАГ 2: Корректное завершение trading_system (поддержка async/sync)
             if hasattr(self.trading_system, 'shutdown'):
-                await self.trading_system.shutdown()
+                try:
+                    self.logger.info("Shutting down trading system...")
+                    shutdown_method = self.trading_system.shutdown
 
+                    # Проверяем async или sync
+                    if asyncio.iscoroutinefunction(shutdown_method):
+                        # Асинхронный метод
+                        await shutdown_method()
+                        self.logger.info("Trading system shutdown completed (async)")
+                    else:
+                        # Синхронный метод
+                        result = shutdown_method()
+                        # Если вдруг вернул coroutine (некорректная реализация)
+                        if asyncio.iscoroutine(result):
+                            await result
+                        self.logger.info("Trading system shutdown completed (sync)")
+
+                except Exception as e:
+                    self.logger.error(f"Error during trading_system shutdown: {e}", exc_info=True)
+
+            # ✅ ШАГ 3: Остановка системы мониторинга
             if hasattr(self.monitoring_system, 'monitoring_active'):
-                self.monitoring_system.monitoring_active = False
+                try:
+                    self.logger.info("Stopping monitoring system...")
+                    self.monitoring_system.monitoring_active = False
+                    self.logger.info("Monitoring system stopped")
+                except Exception as e:
+                    self.logger.warning(f"Error stopping monitoring system: {e}")
 
+            # ✅ ШАГ 4: Финальная статистика (безопасно)
             try:
                 final_performance = self.trading_system.get_performance_report()
                 self.logger.info(f"Final performance: {final_performance}")
             except Exception as e:
                 self.logger.warning(f"Could not get final performance: {e}")
 
-            self.logger.info("Trading bot shutdown complete")
+            # ✅ ШАГ 5: Закрываем data_provider (если есть метод close)
+            if hasattr(self.data_provider, 'close'):
+                try:
+                    close_method = self.data_provider.close
+                    if asyncio.iscoroutinefunction(close_method):
+                        await close_method()
+                    else:
+                        result = close_method()
+                        if asyncio.iscoroutine(result):
+                            await result
+                    self.logger.info("Data provider closed")
+                except Exception as e:
+                    self.logger.warning(f"Error closing data provider: {e}")
+
+            # ✅ ШАГ 6: Закрываем execution_engine (если есть метод close)
+            if hasattr(self.execution_engine, 'close'):
+                try:
+                    close_method = self.execution_engine.close
+                    if asyncio.iscoroutinefunction(close_method):
+                        await close_method()
+                    else:
+                        result = close_method()
+                        if asyncio.iscoroutine(result):
+                            await result
+                    self.logger.info("Execution engine closed")
+                except Exception as e:
+                    self.logger.warning(f"Error closing execution engine: {e}")
+
+            self.logger.info("✅ Trading bot shutdown complete")
 
         except Exception as e:
-            self.logger.error(f"Error during shutdown: {e}")
+            self.logger.error(f"❌ Critical error during shutdown: {e}", exc_info=True)
+            raise
 
     def get_status(self) -> Dict:
         """Получение текущего статуса бота"""
@@ -1118,6 +1224,20 @@ class PositionTracker:
         self.max_history = max_history
         self._logger = logging.getLogger(self.__class__.__name__)
 
+    @property
+    def max_history(self) -> int:
+        return self._max_history
+
+    @max_history.setter
+    def max_history(self, value: int):
+        """✅ Защита от None и отрицательных значений"""
+        if value is None or value < 0:
+            raise ValueError(f"max_history must be positive int, got {value}")
+
+        self._max_history = value
+        # Пересоздаем deque с новым maxlen
+        self.closed_positions = deque(self.closed_positions, maxlen=value)
+
     def add_position(self, position_id: str, position_data: Dict):
         """Добавление новой позиции"""
         self.positions[position_id] = {
@@ -1135,13 +1255,15 @@ class PositionTracker:
         position = self.positions[position_id]
         signal = position['signal']
 
-        direction = signal.get('direction', 'FLAT')
+        direction = signal.get('direction', 0)  # ✅ Default int
         entry_price = signal.get('entry_price', 0.0)
         position_size = signal.get('position_size', 0.0)
 
-        if direction == 'BUY':
+        from iqts_standards import Direction
+
+        if direction == Direction.BUY or direction == 1 or direction == 'BUY':  # ✅ Поддержка всех форматов
             unrealized_pnl = (current_price - entry_price) * position_size
-        elif direction == 'SELL':
+        elif direction == Direction.SELL or direction == -1 or direction == 'SELL':  # ✅
             unrealized_pnl = (entry_price - current_price) * position_size
         else:
             unrealized_pnl = 0.0
@@ -1151,25 +1273,39 @@ class PositionTracker:
         position['last_update'] = datetime.now()
 
     def calculate_realized_pnl(self, position_id: str, close_price: float) -> float:
-        """Расчет реализованного PnL на основе цены закрытия"""
+        """Расчет реализованного PnL на основе цены закрытия с учётом комиссии"""
         if position_id not in self.positions:
             return 0.0
 
         position = self.positions[position_id]
         signal = position['signal']
+        execution_result = position.get('execution_result', {})
 
         direction = signal.get('direction', 'FLAT')
         entry_price = signal.get('entry_price', 0.0)
         position_size = signal.get('position_size', 0.0)
 
-        if direction == 'BUY':
-            realized_pnl = (close_price - entry_price) * position_size
-        elif direction == 'SELL':
-            realized_pnl = (entry_price - close_price) * position_size
+        # Базовый PnL
+        if direction == 'BUY' or direction == 1:
+            gross_pnl = (close_price - entry_price) * position_size
+        elif direction == 'SELL' or direction == -1:
+            gross_pnl = (entry_price - close_price) * position_size
         else:
-            realized_pnl = 0.0
+            gross_pnl = 0.0
 
-        return float(realized_pnl)
+        # ✅ Учитываем комиссии
+        entry_fee = execution_result.get('entry_fee', 0.0)
+        exit_fee = execution_result.get('exit_fee', 0.0)
+
+        # Если комиссии нет в execution_result, рассчитываем стандартные (например 0.04%)
+        if entry_fee == 0 and exit_fee == 0:
+            fee_rate = 0.0004  # 0.04% Binance Futures maker/taker fee
+            entry_fee = entry_price * position_size * fee_rate
+            exit_fee = close_price * position_size * fee_rate
+
+        net_pnl = gross_pnl - entry_fee - exit_fee
+
+        return float(net_pnl)
 
     def close_position(self, position_id: str, close_price: float, realized_pnl: float):
         """

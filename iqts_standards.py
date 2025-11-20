@@ -683,7 +683,7 @@ class TradingSystemInterface(Protocol):
 
     def get_system_status(self) -> SystemStatus: ...
 
-    def update_performance(self, trade_result: Dict[str, Any]) -> None: ...
+    def update_performance(self, trade_result: TradeResult) -> None: ...
 
 
 # === Bot Component Interfaces ===
@@ -710,7 +710,7 @@ class StrategyInterface(Protocol):
         """Статус торговой системы"""
         ...
 
-    def update_performance(self, trade_result: Dict[str, Any]) -> None:
+    def update_performance(self, trade_result: TradeResult) -> None:
         """Обновление метрик производительности"""
         ...
 

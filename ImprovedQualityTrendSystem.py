@@ -16,14 +16,14 @@ from threading import Lock
 
 from iqts_standards import (Timeframe,
     DetectorSignal, TradingSystemInterface,
-     normalize_trading_hours, SystemStatus,TradeSignalIQTS,
-    get_current_timestamp_ms, create_trade_signal)
+     normalize_trading_hours, SystemStatus,
+    get_current_timestamp_ms, create_trade_signal, TradeResult)
 
 # Ядро анализа
 from multi_timeframe_confirmator import ThreeLevelHierarchicalConfirmator
 
 # Риск-менеджмент
-from risk_manager import EnhancedRiskManager, Direction, RiskContext, RiskLimits
+from risk_manager import EnhancedRiskManager, Direction, RiskLimits
 
 # Определяем тип для рыночных режимов
 RegimeType = Literal["strong_uptrend", "weak_uptrend", "strong_downtrend", "weak_downtrend", "sideways", "uncertain"]
@@ -250,7 +250,7 @@ class ImprovedQualityTrendSystem(TradingSystemInterface):
         true_range = pd.concat([high_low, high_close, low_close], axis=1).max(axis=1)
         return true_range.ewm(alpha=1/period, adjust=False).mean().iloc[-1]
 
-    def update_performance(self, trade_result: Dict[str, Any]) -> None:
+    def update_performance(self, trade_result: TradeResult) -> None:
         """
         Обновляет статистику производительности на основе результата сделки.
         Соответствует TradingSystemInterface.
