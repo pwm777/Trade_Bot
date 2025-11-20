@@ -3,6 +3,7 @@ import sqlite3
 import argparse
 import numpy as np
 import pandas as pd
+from iqts_standards import Direction
 
 def cusum_online_delta_closes_with_z(
     closes: pd.Series,
@@ -165,7 +166,7 @@ def backtest_triple_barrier(
         up_mult = float(np.exp(tp_sigma * s))
         dn_mult = float(np.exp(-sl_sigma * s))
 
-        if d == 1:  # LONG
+        if d == Direction.BUY:  # LONG
             tp_price = px_in * up_mult      # вверх = прибыль
             sl_price = px_in * dn_mult      # вниз  = убыток
         else:       # SHORT (2)

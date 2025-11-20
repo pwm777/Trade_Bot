@@ -301,9 +301,10 @@ class EnhancedTradingBot:
                 return None
 
             # Определяем intent по direction
-            if direction_int == 1:
+            from iqts_standards import Direction
+            if direction_int == Direction.BUY:
                 intent = "LONG_OPEN"
-            elif direction_int == -1:
+            elif direction_int == Direction.SELL:
                 intent = "SHORT_OPEN"
             else:
                 self.logger.debug(f"Skipping FLAT signal (direction={direction_int})")

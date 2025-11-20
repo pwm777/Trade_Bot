@@ -133,8 +133,9 @@ class ExitSignalDetector:
         pos_dir = normalize_direction(position_direction)  # 1/-1/0
 
         # Разворот = противоположное направление
-        is_reversal = (pos_dir == 1 and signal_direction == -1) or (pos_dir == -1 and signal_direction == 1)
-
+        from iqts_standards import Direction
+        is_reversal = (pos_dir == Direction.BUY and signal_direction == Direction.SELL) or \
+                      (pos_dir == Direction.SELL and signal_direction == Direction.BUY)
         return {
             'detected': is_reversal,
             'confidence': signal_confidence if is_reversal else 0.0,

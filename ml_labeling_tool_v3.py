@@ -8,6 +8,7 @@ import pandas as pd
 import sys
 import hashlib, json
 from dataclasses import dataclass
+from iqts_standards import Direction
 from typing import Tuple, List, Dict,  Any
 from datetime import datetime, UTC
 import warnings
@@ -1228,8 +1229,8 @@ class AdvancedLabelingTool:
 
         for i in idxs:
             s = int(state.loc[i])
-            signal_type = "BUY" if s == 1 else "SELL"  # 0 (HOLD) сюда не попадает
-            label = 1 if s == 1 else 2  # формат инструмента
+            signal_type = "BUY" if s == Direction.BUY else "SELL"
+            label = Direction.BUY if s == Direction.BUY else Direction.SELL
             base_conf = float(conf.loc[i]) if pd.notna(conf.loc[i]) else 0.0
             base_conf = max(0.2, min(0.95, base_conf))  # мягкие границы
 

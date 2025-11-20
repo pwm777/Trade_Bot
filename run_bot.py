@@ -1383,9 +1383,10 @@ class BotLifecycleManager:
                         }
 
                     # Определяем intent
-                    if direction_int == 1:
+                    from iqts_standards import Direction
+                    if direction_int == Direction.BUY:
                         intent = "LONG_OPEN"
-                    elif direction_int == -1:
+                    elif direction_int == Direction.SELL:
                         intent = "SHORT_OPEN"
                     else:
                         return {
