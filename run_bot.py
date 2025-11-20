@@ -1906,7 +1906,6 @@ async def main():
         await bot_manager.stop()
         print("✅ Shutdown complete")
 
-
 async def run_backtest_mode():
     """Запуск бота в режиме BACKTEST c автозавершением и финальным отчётом."""
     from backtest_setup import build_backtest_config

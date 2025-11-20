@@ -2143,8 +2143,8 @@ class MarketDataUtils:
                     qmax = text(f"SELECT MAX(ts) AS max_ts FROM {TABLES['candles_5m']} WHERE symbol=:s")
                     rmin = await conn.execute(qmin, {"s": sym})
                     rmax = await conn.execute(qmax, {"s": sym})
-                    min_ts = (await rmin.mappings().first())["min_ts"]
-                    max_ts = (await rmax.mappings().first())["max_ts"]
+                    min_ts = (rmin.mappings().first())["min_ts"]
+                    max_ts = (rmax.mappings().first())["max_ts"]
                     if min_ts is None or max_ts is None:
                         raise RuntimeError(f"No 5m data for symbol {sym}")
                     min_ts = int(min_ts)
