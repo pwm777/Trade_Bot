@@ -3070,22 +3070,22 @@ CREATE TABLE candles_5m (
 
 sql
 CREATE TABLE orders (
-                        client_order_id TEXT PRIMARY KEY,
-                        position_id INTEGER,
-                        symbol TEXT NOT NULL,
-                        type TEXT NOT NULL,
-                        side TEXT NOT NULL,
-                        tif TEXT,
-                        qty DECIMAL(18,8) NOT NULL,
-                        price DECIMAL(18,8),
-                        stop_price DECIMAL(18,8),
-                        reduce_only INTEGER NOT NULL DEFAULT 0,
-                        status TEXT NOT NULL DEFAULT 'NEW',
-                        cancel_requested INTEGER NOT NULL DEFAULT 0,
-                        exchange_order_id TEXT,
-                        correlation_id TEXT,
-                        created_ts BIGINT DEFAULT (strftime('%s','now')*1000),
-                        updated_ts BIGINT DEFAULT (strftime('%s','now')*1000)
+     client_order_id TEXT PRIMARY KEY,
+     position_id INTEGER,
+     symbol TEXT NOT NULL,
+     type TEXT NOT NULL,
+     side TEXT NOT NULL,
+     tif TEXT,
+     qty DECIMAL(18,8) NOT NULL,
+     price DECIMAL(18,8),
+     stop_price DECIMAL(18,8),
+     reduce_only INTEGER NOT NULL DEFAULT 0,
+     status TEXT NOT NULL DEFAULT 'NEW',
+     cancel_requested INTEGER NOT NULL DEFAULT 0,
+     exchange_order_id TEXT,
+     correlation_id TEXT,
+     created_ts BIGINT DEFAULT (strftime('%s','now')*1000),
+     updated_ts BIGINT DEFAULT (strftime('%s','now')*1000)
                     )
 
 =============================================================			
@@ -3094,25 +3094,25 @@ CREATE TABLE orders (
 
 sql
 CREATE TABLE positions (
-                        id INTEGER PRIMARY KEY AUTOINCREMENT,
-                        symbol TEXT NOT NULL,
-                        side TEXT NOT NULL CHECK (side IN ('LONG','SHORT')),
-                        status TEXT NOT NULL CHECK (status IN ('OPEN','CLOSING','CLOSED','FLAT')) DEFAULT 'OPEN',
-                        entry_ts BIGINT NOT NULL,
-                        entry_price DECIMAL(18,8) NOT NULL,
-                        qty DECIMAL(18,8) NOT NULL,
-                        position_usdt DECIMAL(18,8) NOT NULL,
-                        exit_ts BIGINT,
-                        exit_price DECIMAL(18,8),
-                        realized_pnl_usdt DECIMAL(18,8),
-                        realized_pnl_pct DECIMAL(18,8),
-                        leverage DECIMAL(18,8),
-                        fee_total_usdt DECIMAL(18,8),
-                        reason_entry TEXT,
-                        reason_exit TEXT,
-                        correlation_id TEXT,
-                        created_ts BIGINT DEFAULT (strftime('%s','now')*1000),
-                        updated_ts BIGINT DEFAULT (strftime('%s','now')*1000)
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    symbol TEXT NOT NULL,
+    side TEXT NOT NULL CHECK (side IN ('LONG','SHORT')),
+    status TEXT NOT NULL CHECK (status IN ('OPEN','CLOSING','CLOSED','FLAT')) DEFAULT 'OPEN',
+    entry_ts BIGINT NOT NULL,
+    entry_price DECIMAL(18,8) NOT NULL,
+    qty DECIMAL(18,8) NOT NULL,
+    position_usdt DECIMAL(18,8) NOT NULL,
+    exit_ts BIGINT,
+    exit_price DECIMAL(18,8),
+    realized_pnl_usdt DECIMAL(18,8),
+    realized_pnl_pct DECIMAL(18,8),
+    leverage DECIMAL(18,8),
+    fee_total_usdt DECIMAL(18,8),
+    reason_entry TEXT,
+    reason_exit TEXT,
+    correlation_id TEXT,
+    created_ts BIGINT DEFAULT (strftime('%s','now')*1000),
+    updated_ts BIGINT DEFAULT (strftime('%s','now')*1000)
                     )
 
 ====================================================================
@@ -3120,24 +3120,24 @@ CREATE TABLE positions (
 
 
 CREATE TABLE trades (
-                        id INTEGER PRIMARY KEY AUTOINCREMENT,
-                        symbol TEXT NOT NULL,
-                        entry_ts BIGINT NOT NULL,
-                        exit_ts BIGINT,
-                        entry_price DECIMAL(18,8) NOT NULL,
-                        exit_price DECIMAL(18,8),
-                        side TEXT NOT NULL,
-                        quantity DECIMAL(18,8) NOT NULL,
-                        position_size_usdt DECIMAL(18,8) NOT NULL,
-                        gross_pnl_percent DECIMAL(18,8),
-                        gross_pnl_usdt DECIMAL(18,8),
-                        net_pnl_percent DECIMAL(18,8),
-                        net_pnl_usdt DECIMAL(18,8),
-                        fee_total DECIMAL(18,8),
-                        duration_seconds INT,
-                        reason TEXT,
-                        exit_reason TEXT,
-                        bars_in_trade INTEGER
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    symbol TEXT NOT NULL,
+    entry_ts BIGINT NOT NULL,
+    exit_ts BIGINT,
+    entry_price DECIMAL(18,8) NOT NULL,
+    exit_price DECIMAL(18,8),
+    side TEXT NOT NULL,
+    quantity DECIMAL(18,8) NOT NULL,
+    position_size_usdt DECIMAL(18,8) NOT NULL,
+    gross_pnl_percent DECIMAL(18,8),
+    gross_pnl_usdt DECIMAL(18,8),
+    net_pnl_percent DECIMAL(18,8),
+    net_pnl_usdt DECIMAL(18,8),
+    fee_total DECIMAL(18,8),
+    duration_seconds INT,
+    reason TEXT,
+    exit_reason TEXT,
+    bars_in_trade INTEGER
                     )
 ===================================================================
 ### positions_risk_audit
