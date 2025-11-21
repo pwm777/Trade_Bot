@@ -13,7 +13,7 @@ import asyncio
 import logging
 import signal
 from dataclasses import dataclass, field
-from typing import Optional, Any, List, Dict, cast, Literal, Callable
+from typing import Optional, Any, List, Dict, cast, Literal, Callable, Tuple
 from market_data_utils import ensure_market_schema
 from sqlalchemy import create_engine
 from datetime import datetime, UTC
@@ -1273,14 +1273,33 @@ class BotLifecycleManager:
             def __init__(self, market_data_utils: Any, logger: logging.Logger):
                 self.utils = market_data_utils
                 self.logger = logger
+                # ✅ ДОБАВИТЬ: Кэш загруженных данных
+                self._cache: Dict[Tuple[str, str], Tuple[pd.DataFrame, int]] = {}
+                self._cache_ttl_ms = 1000  # 1 секунда кэша
                 self.logger.info("✅ DataProviderFromDB created (DB-only mode, no buffer)")
 
             async def _load_from_db(self, symbol: str, timeframe: str, limit: int = 1000) -> Optional[pd.DataFrame]:
                 """
                 Загрузить исторические данные из БД.
-                ✅ ИСПРАВЛЕНО: Учитывает simulated_time в BACKTEST режиме
+                ✅ ИСПРАВЛЕНО: Учитывает simulated_time в BACKTEST режиме + кэширование
                 """
                 try:
+                    # ✅ НОВОЕ: Проверяем кэш
+                    from iqts_standards import get_current_timestamp_ms
+                    current_time_ms = get_current_timestamp_ms()
+
+                    cache_key = (symbol, timeframe)
+                    if cache_key in self._cache:
+                        cached_df, cached_ts = self._cache[cache_key]
+                        cache_age = current_time_ms - cached_ts
+
+                        if cache_age < self._cache_ttl_ms:
+                            self.logger.debug(
+                                f"📦 Cache HIT for {symbol} {timeframe} (age: {cache_age}ms)"
+                            )
+                            return cached_df.copy()
+
+                    # ✅ Загружаем из БД (существующий код)
                     if timeframe == '1m':
                         actual_limit = min(limit, 500)
                         read_method = self.utils.read_candles_1m
@@ -1291,36 +1310,18 @@ class BotLifecycleManager:
                         self.logger.warning(f"Unsupported timeframe for DB load: {timeframe}")
                         return None
 
-                    # ✅ НОВОЕ: Получаем текущее время (с учётом simulated_time)
-                    from iqts_standards import get_current_timestamp_ms
-                    current_time_ms = get_current_timestamp_ms()
-
-                    # ✅ НОВОЕ: Вычисляем start_ts на основе limit
-                    # Для 5m: 200 свечей = 1000 минут = ~16.7 часов
-                    # Для 1m: 500 свечей = 500 минут = ~8.3 часов
                     interval_ms = 300_000 if timeframe == '5m' else 60_000
                     start_time_ms = current_time_ms - (actual_limit * interval_ms)
 
-                    # ✅ ИСПРАВЛЕНИЕ: Используем диапазон [start_ts, end_ts] вместо last_n
-                    if asyncio.iscoroutinefunction(read_method):
-                        self.logger.debug(
-                            f"Calling async {read_method.__name__} for {symbol} {timeframe} "
-                            f"(start={start_time_ms}, end={current_time_ms})"
-                        )
-                        data = await read_method(
-                            symbol=symbol,
-                            start_ts=start_time_ms,
-                            end_ts=current_time_ms
-                        )
                     self.logger.debug(
-                            f"Calling async {read_method.__name__} for {symbol} {timeframe} "
-                            f"(start={start_time_ms}, end={current_time_ms})"
-                        )
+                        f"Calling {read_method.__name__} for {symbol} {timeframe} "
+                        f"(start={start_time_ms}, end={current_time_ms})"
+                    )
                     data = await read_method(
-                            symbol=symbol,
-                            start_ts=start_time_ms,
-                            end_ts=current_time_ms
-                        )
+                        symbol=symbol,
+                        start_ts=start_time_ms,
+                        end_ts=current_time_ms
+                    )
 
                     # ✅ Валидация данных
                     if not data:
@@ -1348,6 +1349,16 @@ class BotLifecycleManager:
                     if 'ts' in df.columns:
                         df['timestamp'] = pd.to_datetime(df['ts'], unit='ms', utc=True)
                         df = df.set_index('timestamp')
+
+                    # ✅ НОВОЕ: Сохраняем в кэш
+                    self._cache[cache_key] = (df, current_time_ms)
+
+                    # ✅ Очистка старого кэша (каждые 100 вызовов)
+                    if len(self._cache) > 10:
+                        expired = [k for k, (_, ts) in self._cache.items()
+                                   if current_time_ms - ts > self._cache_ttl_ms * 2]
+                        for k in expired:
+                            del self._cache[k]
 
                     self.logger.info(
                         f"✅ Loaded {len(df)} rows from DB for {symbol} {timeframe} "
