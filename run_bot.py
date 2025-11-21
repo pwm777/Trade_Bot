@@ -1247,7 +1247,7 @@ class BotLifecycleManager:
             async def _load_from_db(self, symbol: str, timeframe: str, limit: int = 1000) -> Optional[pd.DataFrame]:
                 """
                 Загрузить исторические данные из БД.
-                ✅ ИСПРАВЛЕНО: Универсальная обработка async/sync методов
+                ✅ ИСПРАВЛЕНО: Учитывает simulated_time в BACKTEST режиме
                 """
                 try:
                     if timeframe == '1m':
@@ -1260,18 +1260,39 @@ class BotLifecycleManager:
                         self.logger.warning(f"Unsupported timeframe for DB load: {timeframe}")
                         return None
 
-                    # ✅ УНИВЕРСАЛЬНЫЙ ВЫЗОВ: Проверяем async или sync
+                    # ✅ НОВОЕ: Получаем текущее время (с учётом simulated_time)
+                    from iqts_standards import get_current_timestamp_ms
+                    current_time_ms = get_current_timestamp_ms()
+
+                    # ✅ НОВОЕ: Вычисляем start_ts на основе limit
+                    # Для 5m: 200 свечей = 1000 минут = ~16.7 часов
+                    # Для 1m: 500 свечей = 500 минут = ~8.3 часов
+                    interval_ms = 300_000 if timeframe == '5m' else 60_000
+                    start_time_ms = current_time_ms - (actual_limit * interval_ms)
+
+                    # ✅ ИСПРАВЛЕНИЕ: Используем диапазон [start_ts, end_ts] вместо last_n
                     if asyncio.iscoroutinefunction(read_method):
-                        # Async version
-                        self.logger.debug(f"Calling async {read_method.__name__} for {symbol} {timeframe}")
-                        data = await read_method(symbol=symbol, last_n=actual_limit)
+                        self.logger.debug(
+                            f"Calling async {read_method.__name__} for {symbol} {timeframe} "
+                            f"(start={start_time_ms}, end={current_time_ms})"
+                        )
+                        data = await read_method(
+                            symbol=symbol,
+                            start_ts=start_time_ms,
+                            end_ts=current_time_ms
+                        )
                     else:
-                        # Sync version - запускаем в executor чтобы не блокировать event loop
-                        self.logger.debug(f"Calling sync {read_method.__name__} for {symbol} {timeframe} in executor")
+                        self.logger.debug(
+                            f"Calling sync {read_method.__name__} for {symbol} {timeframe} in executor"
+                        )
                         loop = asyncio.get_event_loop()
                         data = await loop.run_in_executor(
                             None,
-                            lambda: read_method(symbol=symbol, last_n=actual_limit)
+                            lambda: read_method(
+                                symbol=symbol,
+                                start_ts=start_time_ms,
+                                end_ts=current_time_ms
+                            )
                         )
 
                     # ✅ Валидация данных
@@ -1292,7 +1313,8 @@ class BotLifecycleManager:
                         df = pd.DataFrame(data)
                     except ValueError as ve:
                         self.logger.error(
-                            f"DataFrame creation failed: {ve}, data sample: {data[:2] if len(data) > 0 else 'empty'}")
+                            f"DataFrame creation failed: {ve}, data sample: {data[:2] if len(data) > 0 else 'empty'}"
+                        )
                         return None
 
                     # ✅ Создаем timestamp из ts для ML-модели
@@ -1302,7 +1324,8 @@ class BotLifecycleManager:
 
                     self.logger.info(
                         f"✅ Loaded {len(df)} rows from DB for {symbol} {timeframe} "
-                        f"(limit requested={limit}, actual={actual_limit})"
+                        f"(range: {start_time_ms} → {current_time_ms}, "
+                        f"limit requested={limit}, actual={actual_limit})"
                     )
                     return df
 
