@@ -510,7 +510,7 @@ class BotLifecycleManager:
                 logger_instance=logger
             )
 
-            async def on_candle_ready(symbol: str, candle: Candle1m, recent: List[Candle1m]) -> None:
+            async def on_candle_ready(symbol: str, candle: Dict[str, Any], recent: List[Dict[str, Any]]) -> None:
                 """Обработчик готовой свечи - сохраняет в БД и вызывает детекторы стратегии"""
                 timeframe_label = candle.get('_timeframe', '?')
                 logger.info(f"🎯 on_candle_ready received: {symbol} @ {candle['ts']} (_timeframe={timeframe_label})")
@@ -1312,18 +1312,14 @@ class BotLifecycleManager:
                             start_ts=start_time_ms,
                             end_ts=current_time_ms
                         )
-                    else:
-                        self.logger.debug(
-                            f"Calling sync {read_method.__name__} for {symbol} {timeframe} in executor"
+                    self.logger.debug(
+                            f"Calling async {read_method.__name__} for {symbol} {timeframe} "
+                            f"(start={start_time_ms}, end={current_time_ms})"
                         )
-                        loop = asyncio.get_event_loop()
-                        data = await loop.run_in_executor(
-                            None,
-                            lambda: read_method(
-                                symbol=symbol,
-                                start_ts=start_time_ms,
-                                end_ts=current_time_ms
-                            )
+                    data = await read_method(
+                            symbol=symbol,
+                            start_ts=start_time_ms,
+                            end_ts=current_time_ms
                         )
 
                     # ✅ Валидация данных
@@ -1787,11 +1783,8 @@ class BotLifecycleManager:
         # ================================================================
 
         adapter = MainBotAdapter(core_bot, logger)
-<<<<<<< HEAD
         # Сохраняем ссылку на адаптер для доступа к _active_analysis_tasks
-=======
         # ✅ Сохраняем ссылку на адаптер для доступа к _active_analysis_tasks
->>>>>>> ad343dca9d92fb273094cc5b359dc43105acb848
         core_bot._adapter = adapter
         logger.info("✅ MainBotAdapter created")
 
