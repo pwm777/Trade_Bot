@@ -633,7 +633,7 @@ class BotLifecycleManager:
 
                     logger.info(f"🔍 Detected {timeframe} candle for {symbol}, triggering strategy analysis")
 
-                    # ✅ ИСПРАВЛЕНИЕ: Запускаем анализ в фоновой задаче
+                    # Запускаем анализ в фоновой задаче с дедупликацией
                     async def analyze_and_trade():
                         """Фоновая задача для анализа и торговли"""
                         try:
@@ -706,6 +706,47 @@ class BotLifecycleManager:
 
                         except Exception as analysis_err:
                             logger.error(f"❌ CRITICAL ERROR during strategy analysis: {analysis_err}", exc_info=True)
+                        finally:
+                            # ✅ ДОБАВИТЬ: Очистка активной задачи после завершения
+                            adapter = getattr(main_bot, '_adapter', None)
+                            if adapter and hasattr(adapter, '_active_analysis_tasks'):
+                                if symbol in adapter._active_analysis_tasks:
+                                    del adapter._active_analysis_tasks[symbol]
+                                    logger.debug(f"✅ Removed active analysis task for {symbol}")
+
+                    # ✅ НОВАЯ ЛОГИКА: Проверка активной задачи перед созданием новой
+                    try:
+                        # Получаем адаптер
+                        adapter = getattr(main_bot, '_adapter', None)
+
+                        if adapter and hasattr(adapter, '_active_analysis_tasks'):
+                            # Проверяем, есть ли активная задача для этого символа
+                            if symbol in adapter._active_analysis_tasks:
+                                task = adapter._active_analysis_tasks[symbol]
+                                if not task.done():
+                                    logger.debug(
+                                        f"⏩ Skipping analysis for {symbol}: previous task still running"
+                                    )
+                                    return
+                                else:
+                                    # Задача завершена, удаляем из трекера
+                                    del adapter._active_analysis_tasks[symbol]
+
+                        # Создаём новую задачу
+                        loop = asyncio.get_event_loop()
+                        task = loop.create_task(analyze_and_trade())
+
+                        # Сохраняем ссылку на задачу
+                        if adapter and hasattr(adapter, '_active_analysis_tasks'):
+                            adapter._active_analysis_tasks[symbol] = task
+                            logger.info(f"✅ Analysis task created for {symbol} (tracked)")
+                        else:
+                            logger.info(f"✅ Analysis task created for {symbol} (not tracked)")
+
+                    except RuntimeError:
+                        # Если нет активного loop, используем ensure_future
+                        task = asyncio.ensure_future(analyze_and_trade())
+                        logger.info(f"✅ Analysis task scheduled for {symbol}")
 
                     # ✅ Получаем event loop и запускаем задачу
                     try:
@@ -1682,6 +1723,7 @@ class BotLifecycleManager:
                     "candles_processed": 0,
                     "last_candle_ts": None
                 }
+                self._active_analysis_tasks: Dict[str, asyncio.Task] = {}
 
             async def main_trading_loop(self) -> None:
                 """Пустой цикл - работаем в event-driven режиме"""
