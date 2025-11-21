@@ -111,92 +111,94 @@ def _filter_symbols_present(conn: Connection, table: str, symbols: List[str]) ->
 def get_available_data_range(symbols: list = None,
                              timeframe: Optional[str] = None) -> Tuple[Optional[int], Optional[int]]:
     """
-    Определяет доступный диапазон исторических данных из БД для заданного (или авто-выбранного) таймфрейма.
-    Использует MIN/MAX по таблице свечей, без привязки к текущей дате.
-
-    Args:
-        symbols: список символов для сечения.
-        timeframe: "10s" | "1m" | "5m" | None. Если None — берём cfg.BACKTEST_TIMEFRAME, иначе авто-выбор по приоритету.
-
-    Returns:
-        (start_ts_ms, end_ts_ms) или (None, None) если данных нет.
+    ✅ ИСПРАВЛЕНО: Начинаем бэктест с 101-го бара 5m (после warmup периода)
     """
     if symbols is None:
-        symbols = ["SOLUSDT", "ETHUSDT"]
-
-    # нормализуем timeframe
-    tf = (timeframe or getattr(cfg, "BACKTEST_TIMEFRAME", None))
-    tf = tf.strip().lower() if isinstance(tf, str) and tf else None
+        symbols = ["ETHUSDT"]
 
     try:
         engine = _get_engine()
-        chosen_tf, table = _detect_timeframe_and_table(engine, tf)
 
         with engine.connect() as conn:
-            # ограничить символами, реально присутствующими
-            present_symbols = _filter_symbols_present(conn, table, symbols)
-            if not present_symbols:
-                print(f"❌ No historical data found in database for requested symbols: {symbols} (table={table})")
+            # ✅ Получаем диапазон 5m данных
+            table_5m = "candles_5m"
+
+            if not _table_exists(engine, table_5m):
+                print(f"❌ Table {table_5m} not found")
                 return None, None
 
-            q_total = text(f"""
-                SELECT MIN(ts) AS start_ts, MAX(ts) AS end_ts, COUNT(*) AS total_candles
-                FROM {table}
+            present_symbols = _filter_symbols_present(conn, table_5m, symbols)
+            if not present_symbols:
+                print(f"❌ No 5m data for symbols: {symbols}")
+                return None, None
+
+            # ✅ НОВАЯ ЛОГИКА: Получаем 101-ю свечу как стартовую точку
+            q_warmup = text(f"""
+                SELECT ts, ts_close
+                FROM {table_5m}
+                WHERE symbol IN :symbols
+                ORDER BY ts ASC
+                LIMIT 1 OFFSET 100
+            """).bindparams(bindparam("symbols", expanding=True))
+
+            row_start = conn.execute(q_warmup, {"symbols": present_symbols}).mappings().first()
+
+            if not row_start:
+                print("❌ Not enough 5m data (need at least 101 candles for warmup)")
+                return None, None
+
+            start_ts = row_start["ts"]
+
+            # ✅ Получаем последнюю свечу
+            q_end = text(f"""
+                SELECT MAX(ts) AS end_ts, COUNT(*) AS total
+                FROM {table_5m}
                 WHERE symbol IN :symbols
             """).bindparams(bindparam("symbols", expanding=True))
 
-            row = conn.execute(q_total, {"symbols": present_symbols}).mappings().one()
-            start_ts, end_ts, total_candles = row["start_ts"], row["end_ts"], row["total_candles"]
+            row_end = conn.execute(q_end, {"symbols": present_symbols}).mappings().one()
+            end_ts = row_end["end_ts"]
+            total_candles = row_end["total"]
 
-            if not total_candles or not start_ts or not end_ts:
-                print(f"❌ No historical data found in database (empty range) for table={table}")
+            if not end_ts or start_ts >= end_ts:
+                print("❌ Invalid time range after warmup")
                 return None, None
 
-            # Статистика по символам
-            print("📊 Available historical data:")
+            # ✅ Статистика
+            print("📊 Backtest data range (after 100-bar 5m warmup):")
             print("-" * 60)
-            q_symbol = text(f"""
-                SELECT COUNT(*) AS c, MIN(ts) AS mn, MAX(ts) AS mx
-                FROM {table}
-                WHERE symbol = :symbol
-            """)
-            for symbol in present_symbols:
-                rs = conn.execute(q_symbol, {"symbol": symbol}).mappings().one()
-                count, min_ts, max_ts = rs["c"], rs["mn"], rs["mx"]
-                if count and min_ts and max_ts:
-                    min_date = datetime.fromtimestamp(min_ts / 1000.0, tz=UTC)
-                    max_date = datetime.fromtimestamp(max_ts / 1000.0, tz=UTC)
-                    hours_coverage = (max_ts - min_ts) / (1000 * 60 * 60)
-                    print(f"📈 {symbol}: {count:,} candles")
-                    print(f"   🕒 TF:   {chosen_tf}")
-                    print(f"   📅 From: {min_date.strftime('%Y-%m-%d %H:%M:%S')} UTC")
-                    print(f"   📅 To:   {max_date.strftime('%Y-%m-%d %H:%M:%S')} UTC")
-                    print(f"   ⏱️  Coverage: {hours_coverage:.1f} hours ({hours_coverage / 24:.1f} days)\n")
-                else:
-                    print(f"❌ {symbol}: No data available in {table}")
 
-            # Общая статистика
-            start_date = datetime.fromtimestamp(start_ts / 1000.0, tz=UTC)
-            end_date = datetime.fromtimestamp(end_ts / 1000.0, tz=UTC)
-            total_hours = (end_ts - start_ts) / (1000 * 60 * 60)
+            # Показываем начало БД
+            q_first = text(f"""
+                SELECT MIN(ts) AS first_ts
+                FROM {table_5m}
+                WHERE symbol IN :symbols
+            """).bindparams(bindparam("symbols", expanding=True))
+            first_ts = conn.execute(q_first, {"symbols": present_symbols}).mappings().one()["first_ts"]
 
-            print("-" * 60)
-            print(f"📊 Complete historical range (table: {table}, timeframe: {chosen_tf}):")
-            print(f"   📅 Start: {start_date.strftime('%Y-%m-%d %H:%M:%S')} UTC")
-            print(f"   📅 End:   {end_date.strftime('%Y-%m-%d %H:%M:%S')} UTC")
-            print(f"   ⏱️  Duration: {total_hours:.1f} hours ({total_hours / 24:.1f} days)")
-            print(f"   🔢 Total candles: {int(total_candles):,}")
+            first_date = datetime.fromtimestamp(first_ts / 1000, tz=UTC)
+            start_date = datetime.fromtimestamp(start_ts / 1000, tz=UTC)
+            end_date = datetime.fromtimestamp(end_ts / 1000, tz=UTC)
+
+            warmup_hours = (start_ts - first_ts) / (1000 * 60 * 60)
+            duration_hours = (end_ts - start_ts) / (1000 * 60 * 60)
+            duration_days = duration_hours / 24
+
+            print(f"📅 First 5m candle in DB: {first_date.strftime('%Y-%m-%d %H:%M:%S')} UTC")
+            print(f"⏩ Skipping warmup:       {warmup_hours:.1f} hours (100 bars × 5min)")
+            print(f"🚀 Backtest starts:       {start_date.strftime('%Y-%m-%d %H:%M:%S')} UTC (bar #101)")
+            print(f"🏁 Backtest ends:         {end_date.strftime('%Y-%m-%d %H:%M:%S')} UTC")
+            print(f"⏱️  Duration:              {duration_hours:.1f} hours ({duration_days:.1f} days)")
+            print(f"📊 Total 5m candles:      {int(total_candles - 100):,} (excluding warmup)")
             print("-" * 60)
 
             return int(start_ts), int(end_ts)
 
-    except SQLAlchemyError as ext:
-        print(f"❌ SQLAlchemy error while checking data range: {ext}")
+    except Exception as e:
+        print(f"❌ Error checking data range: {e}")
+        import traceback
+        traceback.print_exc()
         return None, None
-    except Exception as ext:
-        print(f"❌ Error checking data range: {ext}")
-        return None, None
-
 
 async def build_backtest_config() -> dict:
     """
