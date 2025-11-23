@@ -298,9 +298,9 @@ class MarketDataUtils:
         self.aengine = create_async_engine(
             dsn,
             future=True,
-            pool_size=30,  # ✅ Было 5 → Стало 30
-            max_overflow=50,  # ✅ Было 10 → Стало 50 (максимум 80 соединений)
-            pool_timeout=60,  # ✅ Увеличен timeout с 30 до 60 сек
+            pool_size=100,  # ✅ Increased from 30 → 100 (3x increase)
+            max_overflow=150,  # ✅ Increased from 50 → 150 (3x increase, total max 250)
+            pool_timeout=120,  # ✅ Doubled from 60 → 120 seconds
             pool_pre_ping=True,  # ✅ Проверка соединений перед использованием
             pool_recycle=3600  # ✅ Переиспользование соединений каждый час
         )
