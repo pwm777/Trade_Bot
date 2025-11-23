@@ -752,7 +752,10 @@ class BotLifecycleManager:
                                         del adapter._task_creation_times[symbol]
 
                         # Создаём новую задачу
-                        loop = asyncio.get_event_loop()
+                        try:
+                            loop = asyncio.get_running_loop()
+                        except RuntimeError:
+                            loop = asyncio.get_event_loop()
                         task = loop.create_task(analyze_and_trade())
 
                         # Сохраняем ссылку на задачу
