@@ -637,7 +637,7 @@ class DemoMarketAggregatorPhased(BaseMarketAggregator):
                 f"dropping candle for {symbol} @ {candle['ts']}"
             )
             with self._main_lock:
-                self._stats["klines_5m_dropped"] = self._stats.get("klines_5m_dropped", 0) + 1
+                self._stats["klines_5m_dropped"] += 1
 
     def _kline_to_candle1m(self, kline: Dict[str, Any], interval_ms: int) -> Optional[Candle1m]:
         """
@@ -859,8 +859,15 @@ class DemoMarketAggregatorPhased(BaseMarketAggregator):
         
         while self._is_running:
             try:
-                # ✅ Ждём свечу из очереди (блокирующий вызов)
-                symbol, candle = await self._candle_5m_queue.get()
+                # ✅ Ждём свечу из очереди с таймаутом для проверки _is_running
+                try:
+                    symbol, candle = await asyncio.wait_for(
+                        self._candle_5m_queue.get(),
+                        timeout=1.0
+                    )
+                except asyncio.TimeoutError:
+                    # Таймаут - проверяем флаг и продолжаем ожидание
+                    continue
                 
                 self.logger.info(
                     f"📤 Processing 5m candle from queue: {symbol} @ {candle['ts']} "
