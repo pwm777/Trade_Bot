@@ -355,11 +355,18 @@ class DemoMarketAggregatorPhased(BaseMarketAggregator):
         self._ws_task = None
         self._should_reconnect = True
 
+        # ✅ НОВОЕ: Очередь для последовательной обработки 5m свечей
+        self._candle_5m_queue: asyncio.Queue = asyncio.Queue(maxsize=5)
+        self._candle_5m_worker_task: Optional[asyncio.Task] = None
+
+        self.logger.info("✅ 5m candle queue initialized (maxsize=5)")
+
         # Дополнительные счетчики для статистики
         self._stats.update({
             "ws_messages_received": 0,
             "klines_1m_received": 0,
             "klines_5m_received": 0,
+            "klines_5m_dropped": 0,  # ✅ НОВОЕ: Счётчик пропущенных свечей
             "finalized_1m": 0,
             "finalized_5m": 0,
         })
@@ -400,6 +407,11 @@ class DemoMarketAggregatorPhased(BaseMarketAggregator):
                 self._symbol_buffers_1m[s] = deque(maxlen=400)
                 self._symbol_buffers_5m[s] = deque(maxlen=400)
 
+        # ✅ НОВОЕ: Запускаем worker для обработки очереди 5m свечей
+        if not self._candle_5m_worker_task or self._candle_5m_worker_task.done():
+            self._candle_5m_worker_task = asyncio.create_task(self._process_5m_queue_worker())
+            self.logger.info("✅ 5m queue worker started")
+
         # Загрузка последней исторической 1m свечи
         if self._market_data_utils:
             for s in symbols:
@@ -435,6 +447,11 @@ class DemoMarketAggregatorPhased(BaseMarketAggregator):
 
     def stop(self) -> None:
         try:
+            # ✅ НОВОЕ: Останавливаем worker очереди (ПЕРЕД установкой _is_running = False)
+            if self._candle_5m_worker_task and not self._candle_5m_worker_task.done():
+                self._candle_5m_worker_task.cancel()
+                self.logger.info("✅ 5m queue worker stop requested")
+
             with self._main_lock:
                 self._is_running = False
                 self._should_reconnect = False
@@ -606,8 +623,21 @@ class DemoMarketAggregatorPhased(BaseMarketAggregator):
                 self._last_historical_ts_5m[symbol] = candle["ts"]
                 self.logger.debug(f"Updated last_historical_ts_5m for {symbol}: {candle['ts']}")
 
-        # ✅ Обрабатываем свечу АСИНХРОННО
-        asyncio.create_task(self._on_candle_ready_5m(symbol, candle))
+        # ✅ НОВОЕ: Добавляем свечу в очередь вместо немедленной обработки
+        try:
+            self._candle_5m_queue.put_nowait((symbol, candle))
+            self.logger.debug(
+                f"📥 5m candle added to queue: {symbol} @ {candle['ts']} "
+                f"(queue size: {self._candle_5m_queue.qsize()})"
+            )
+        except asyncio.QueueFull:
+            # Очередь переполнена - пропускаем свечу
+            self.logger.warning(
+                f"⚠️ 5m queue is FULL ({self._candle_5m_queue.maxsize}), "
+                f"dropping candle for {symbol} @ {candle['ts']}"
+            )
+            with self._main_lock:
+                self._stats["klines_5m_dropped"] = self._stats.get("klines_5m_dropped", 0) + 1
 
     def _kline_to_candle1m(self, kline: Dict[str, Any], interval_ms: int) -> Optional[Candle1m]:
         """
@@ -814,6 +844,61 @@ class DemoMarketAggregatorPhased(BaseMarketAggregator):
                 await result
         except Exception as e:
             self.logger.error(f"on_candle_ready error (5m): {e}", exc_info=True)
+
+    async def _process_5m_queue_worker(self) -> None:
+        """
+        Worker для последовательной обработки 5m свечей из очереди.
+        
+        ✅ ГАРАНТИРУЕТ:
+        - Свечи обрабатываются строго по одной (FIFO)
+        - Следующая свеча начинает обработку ТОЛЬКО после завершения предыдущей
+        - Исключает параллельные запросы к БД
+        - Предотвращает connection pool exhaustion
+        """
+        self.logger.info("🔄 5m queue worker started")
+        
+        while self._is_running:
+            try:
+                # ✅ Ждём свечу из очереди (блокирующий вызов)
+                symbol, candle = await self._candle_5m_queue.get()
+                
+                self.logger.info(
+                    f"📤 Processing 5m candle from queue: {symbol} @ {candle['ts']} "
+                    f"(remaining in queue: {self._candle_5m_queue.qsize()})"
+                )
+                
+                # ✅ Измеряем время обработки
+                process_start = asyncio.get_event_loop().time()
+                
+                try:
+                    # Обрабатываем свечу
+                    await self._on_candle_ready_5m(symbol, candle)
+                    
+                    process_time = asyncio.get_event_loop().time() - process_start
+                    
+                    self.logger.info(
+                        f"✅ 5m candle processed in {process_time:.2f}s: "
+                        f"{symbol} @ {candle['ts']}"
+                    )
+                    
+                except Exception as e:
+                    self.logger.error(
+                        f"❌ Error processing 5m candle from queue: "
+                        f"{symbol} @ {candle['ts']}: {e}",
+                        exc_info=True
+                    )
+                finally:
+                    # ✅ Сообщаем очереди что задача завершена
+                    self._candle_5m_queue.task_done()
+                    
+            except asyncio.CancelledError:
+                self.logger.info("🛑 5m queue worker cancelled")
+                break
+            except Exception as e:
+                self.logger.error(f"❌ Unexpected error in 5m queue worker: {e}", exc_info=True)
+                await asyncio.sleep(1)  # Небольшая задержка перед повтором
+        
+        self.logger.info("🛑 5m queue worker stopped")
 
     # ---------------------- Интерфейс ----------------------
 
