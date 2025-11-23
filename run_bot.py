@@ -718,6 +718,9 @@ class BotLifecycleManager:
                                 if symbol in adapter._active_analysis_tasks:
                                     del adapter._active_analysis_tasks[symbol]
                                     logger.debug(f"✅ Removed active analysis task for {symbol}")
+                                # Also cleanup creation time tracking
+                                if hasattr(adapter, '_task_creation_times') and symbol in adapter._task_creation_times:
+                                    del adapter._task_creation_times[symbol]
 
                     # ✅ НОВАЯ ЛОГИКА: Проверка активной задачи перед созданием новой
                     try:
@@ -745,6 +748,8 @@ class BotLifecycleManager:
                                 else:
                                     # Задача завершена, удаляем из трекера
                                     del adapter._active_analysis_tasks[symbol]
+                                    if hasattr(adapter, '_task_creation_times') and symbol in adapter._task_creation_times:
+                                        del adapter._task_creation_times[symbol]
 
                         # Создаём новую задачу
                         loop = asyncio.get_event_loop()
@@ -753,6 +758,9 @@ class BotLifecycleManager:
                         # Сохраняем ссылку на задачу
                         if adapter and hasattr(adapter, '_active_analysis_tasks'):
                             adapter._active_analysis_tasks[symbol] = task
+                            # Track task creation time
+                            if hasattr(adapter, '_task_creation_times'):
+                                adapter._task_creation_times[symbol] = loop.time()
                             logger.info(
                                 f"✅ Analysis task created for {symbol} (tracked) | "
                                 f"virtual_time={virtual_time_str} | candle_ts={candle_time_str}"
@@ -1748,6 +1756,7 @@ class BotLifecycleManager:
                 self._task_cleanup_interval = 60  # Cleanup every 60s
                 self._task_max_age = 300  # Max task age 5 minutes
                 self._cleanup_task: Optional[asyncio.Task] = None
+                self._task_creation_times: Dict[str, float] = {}  # Track task creation times
 
             async def main_trading_loop(self) -> None:
                 """Пустой цикл - работаем в event-driven режиме"""
@@ -1772,8 +1781,12 @@ class BotLifecycleManager:
                 """Инициализация"""
                 await self.core.initialize()
                 # Start cleanup task
-                self._cleanup_task = asyncio.create_task(self._cleanup_stale_tasks())
-                self.logger.info("MainBotAdapter bootstrap completed")
+                try:
+                    self._cleanup_task = asyncio.create_task(self._cleanup_stale_tasks())
+                    self.logger.info("MainBotAdapter bootstrap completed with cleanup task")
+                except Exception as e:
+                    self.logger.error(f"Failed to start cleanup task: {e}")
+                    self.logger.info("MainBotAdapter bootstrap completed without cleanup task")
 
             def get_stats(self) -> Dict:
                 """Статистика"""
@@ -1799,15 +1812,15 @@ class BotLifecycleManager:
                     try:
                         await asyncio.sleep(self._task_cleanup_interval)
                         
-                        current_time = asyncio.get_event_loop().time()
+                        current_time = asyncio.get_running_loop().time()
                         stale_tasks = []
                         
                         for symbol, task in list(self._active_analysis_tasks.items()):
                             if task.done():
                                 stale_tasks.append(symbol)
                             # Check if task is too old (stuck)
-                            elif hasattr(task, '_start_time'):
-                                age = current_time - task._start_time
+                            elif symbol in self._task_creation_times:
+                                age = current_time - self._task_creation_times[symbol]
                                 if age > self._task_max_age:
                                     self.logger.warning(f"⚠️ Cancelling stale task for {symbol} (age={age:.1f}s)")
                                     task.cancel()
@@ -1815,7 +1828,10 @@ class BotLifecycleManager:
                         
                         # Cleanup
                         for symbol in stale_tasks:
-                            del self._active_analysis_tasks[symbol]
+                            if symbol in self._active_analysis_tasks:
+                                del self._active_analysis_tasks[symbol]
+                            if symbol in self._task_creation_times:
+                                del self._task_creation_times[symbol]
                             
                         if stale_tasks:
                             self.logger.info(f"🧹 Cleaned up {len(stale_tasks)} stale tasks: {stale_tasks}")
