@@ -1741,7 +1741,7 @@ class BotLifecycleManager:
         # MainBotAdapter - без изменений
         # ================================================================
 
-        class MainBotAdapter:
+        class MainBotAdapter(MainBotInterface):
             """Адаптер для EnhancedTradingBot"""
 
             def __init__(self, core: EnhancedTradingBot, logger: logging.Logger):
@@ -1752,6 +1752,7 @@ class BotLifecycleManager:
                 self._stats = {
                     "signals_processed": 0,
                     "candles_processed": 0,
+                    "events_processed": 0,
                     "last_candle_ts": None
                 }
                 self._active_analysis_tasks: Dict[str, asyncio.Task] = {}
@@ -1853,8 +1854,16 @@ class BotLifecycleManager:
                 Свеча уже сохранена в БД агрегатором с индикаторами.
                 """
                 try:
-                    self.logger.info(f"🔥 handle_candle_ready: {symbol} ts={candle.get('ts')}")
-                    self._stats["events_processed"] = int(self._stats.get("events_processed", 0)) + 1
+                    # ✅ DIAGNOSTIC: Confirm callback is working
+                    self.logger.info(
+                        f"🎯 MainBotAdapter.handle_candle_ready called: {symbol} @ {candle.get('ts')} "
+                        f"(_timeframe={candle.get('_timeframe', 'unknown')})"
+                    )
+                    
+                    # Update stats: candles_processed for specific tracking, events_processed for general monitoring
+                    self._stats["candles_processed"] += 1
+                    self._stats["last_candle_ts"] = candle.get('ts')
+                    self._stats["events_processed"] += 1
 
                     # Определяем timeframe из интервала свечи
                     ts = candle.get('ts', 0)
@@ -1881,10 +1890,33 @@ class BotLifecycleManager:
 
         adapter = MainBotAdapter(core_bot, logger)
         # Сохраняем ссылку на адаптер для доступа к _active_analysis_tasks
-        # ✅ Сохраняем ссылку на адаптер для доступа к _active_analysis_tasks
         core_bot._adapter = adapter
-        logger.info("✅ MainBotAdapter created")
 
+        # ✅ CRITICAL FIX: Chain callbacks to include MainBotAdapter
+        if hasattr(market_aggregator, 'on_candle_ready'):
+            original_on_candle_ready = market_aggregator.on_candle_ready
+            
+            async def chained_on_candle_ready(symbol: str, candle: Candle1m, recent: List[Candle1m]) -> None:
+                """Chain callbacks: trade_log → MainBotAdapter"""
+                try:
+                    # Safely await the original callback
+                    result = original_on_candle_ready(symbol, candle, recent)
+                    if asyncio.iscoroutine(result):
+                        await result
+                except Exception as e:
+                    logger.error(f"Error in trade_log callback: {e}")
+                
+                try:
+                    await adapter.handle_candle_ready(symbol, candle, recent)
+                except Exception as e:
+                    logger.error(f"Error in MainBotAdapter callback: {e}", exc_info=True)
+            
+            market_aggregator.on_candle_ready = chained_on_candle_ready
+            logger.info("✅ MainBotAdapter subscribed to MarketAggregator candles")
+        else:
+            logger.error("❌ MarketAggregator missing on_candle_ready callback!")
+
+        logger.info("✅ MainBotAdapter created and subscribed")
         return cast(MainBotInterface, adapter)
 
     async def _check_components_health(self):
