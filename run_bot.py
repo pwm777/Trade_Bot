@@ -1860,6 +1860,7 @@ class BotLifecycleManager:
                         f"(_timeframe={candle.get('_timeframe', 'unknown')})"
                     )
                     
+                    # Update stats: candles_processed for specific tracking, events_processed for general monitoring
                     self._stats["candles_processed"] += 1
                     self._stats["last_candle_ts"] = candle.get('ts')
                     self._stats["events_processed"] += 1
